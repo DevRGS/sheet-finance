@@ -19,6 +19,15 @@ export interface Category {
   cor: string;
 }
 
+export interface Goal {
+  id: string;
+  nome: string;
+  valor_alvo: number;
+  valor_atual: number;
+  prazo: string;
+  cor: string;
+}
+
 export interface GoogleSheetsConfig {
   serviceAccountEmail: string;
   sheetsId: string;
@@ -37,4 +46,14 @@ export interface CategoryData {
   categoria: string;
   valor: number;
   cor: string;
+}
+
+export interface TransactionFilters {
+  search: string;
+  tipo: 'all' | 'Receita' | 'Despesa';
+  categoria: string;
+  periodo: {
+    inicio: string | null;
+    fim: string | null;
+  };
 }
