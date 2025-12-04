@@ -1,73 +1,341 @@
-# Welcome to your Lovable project
+# FinanceFlow - Sistema de Controle Financeiro Pessoal
 
-## Project info
+Sistema moderno e completo de controle financeiro pessoal com dashboard interativo, gráficos analíticos e integração direta com Google Sheets como banco de dados.
 
-**URL**: https://lovable.dev/projects/8c689cd6-1f8e-497e-a57c-41783cd48a3c
+![FinanceFlow](https://img.shields.io/badge/FinanceFlow-v1.0.0-blue)
+![React](https://img.shields.io/badge/React-18.3.1-61DAFB?logo=react)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8.3-3178C6?logo=typescript)
+![Vite](https://img.shields.io/badge/Vite-5.4.19-646CFF?logo=vite)
 
-## How can I edit this code?
+## 📋 Índice
 
-There are several ways of editing your application.
+- [Sobre o Projeto](#sobre-o-projeto)
+- [Funcionalidades](#funcionalidades)
+- [Tecnologias](#tecnologias)
+- [Pré-requisitos](#pré-requisitos)
+- [Instalação](#instalação)
+- [Configuração](#configuração)
+- [Uso](#uso)
+- [Deploy no GitHub Pages](#deploy-no-github-pages)
+- [Estrutura do Projeto](#estrutura-do-projeto)
+- [Contribuindo](#contribuindo)
+- [Licença](#licença)
 
-**Use Lovable**
+## 🎯 Sobre o Projeto
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/8c689cd6-1f8e-497e-a57c-41783cd48a3c) and start prompting.
+O FinanceFlow é uma aplicação web moderna para controle financeiro pessoal que permite gerenciar receitas, despesas, categorias, metas financeiras, transações recorrentes e contas a pagar/receber. Todos os dados são armazenados diretamente no Google Sheets, proporcionando acesso fácil e sincronização automática.
 
-Changes made via Lovable will be committed automatically to this repo.
+## ✨ Funcionalidades
 
-**Use your preferred IDE**
+### 📊 Dashboard
+- **Visão Geral**: Estatísticas rápidas de receitas, despesas, saldo do mês e saldo total
+- **Gráficos Interativos**: 
+  - Gráfico de receitas vs despesas mensais
+  - Gráfico de pizza por categorias
+  - Gráfico de balanço anual com comparação ano a ano
+- **Transações Recentes**: Lista das últimas transações registradas
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### 💰 Transações
+- **CRUD Completo**: Criar, editar, visualizar e excluir transações
+- **Filtros Avançados**: 
+  - Busca por descrição ou categoria
+  - Filtro por tipo (Receita/Despesa)
+  - Filtro por categoria
+  - Filtro por período (data inicial e final)
+- **Categorização**: Organize suas transações por categorias personalizadas
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+### 🔄 Transações Recorrentes
+- **Gestão de Recorrências**: Configure transações que se repetem automaticamente
+- **Tipos de Recorrência**: Mensal, bimestral, trimestral, semestral ou anual
+- **Controle de Duração**: Defina duração por meses ou até cancelamento manual
+- **Ativação/Desativação**: Controle quais recorrências estão ativas
 
-Follow these steps:
+### 📈 Previsões
+- **Geração Automática**: Previsões baseadas em transações recorrentes ativas
+- **Período Configurável**: Visualize previsões para 3, 6, 12 ou 24 meses à frente
+- **Agrupamento por Mês**: Visualize receitas e despesas previstas agrupadas por mês
+- **Cálculo de Saldo Previsto**: Veja o saldo previsto para cada período
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+### 🎯 Metas Financeiras
+- **Criação de Metas**: Defina metas com valor alvo e prazo
+- **Acompanhamento Visual**: Barra de progresso mostra o quanto já foi alcançado
+- **Movimentações**: 
+  - Adicione depósitos para suas metas
+  - Realize saques quando necessário
+  - Histórico completo de movimentações
+- **Cálculo Automático**: Valor atual é calculado automaticamente baseado nas movimentações
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+### 📝 Contas a Pagar/Receber
+- **Gestão de Contas**: Controle contas a pagar e a receber separadamente
+- **Datas de Vencimento**: Defina datas de vencimento opcionais
+- **Status de Pagamento**: Marque contas como pagas/recebidas
+- **Alertas de Vencimento**: Contas vencidas são destacadas visualmente
+- **Filtros**: Filtre por tipo e status (Todas/Pendentes/Pagas)
 
-# Step 3: Install the necessary dependencies.
-npm i
+### 📂 Categorias
+- **Categorias Personalizadas**: Crie e gerencie suas próprias categorias
+- **Cores Personalizadas**: Cada categoria pode ter sua cor identificadora
+- **Estatísticas**: Veja o total gasto por categoria e percentual do total
+- **Proteção**: Categorias com transações não podem ser excluídas
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+### ⚙️ Configurações
+- **Integração Google Sheets**: Configure suas credenciais para sincronização
+- **Conexão Automática**: Sistema tenta conectar automaticamente ao carregar
+- **Validação de Credenciais**: Verificação automática antes de conectar
+
+## 🛠️ Tecnologias
+
+### Frontend
+- **React 18.3.1** - Biblioteca JavaScript para construção de interfaces
+- **TypeScript 5.8.3** - Superset do JavaScript com tipagem estática
+- **Vite 5.4.19** - Build tool moderna e rápida
+- **React Router DOM 6.30.1** - Roteamento para aplicações React
+- **Tailwind CSS 3.4.17** - Framework CSS utility-first
+- **shadcn/ui** - Componentes UI acessíveis e customizáveis
+- **Recharts 2.15.4** - Biblioteca de gráficos para React
+- **React Hook Form 7.61.1** - Gerenciamento de formulários
+- **Zod 3.25.76** - Validação de schemas TypeScript-first
+- **date-fns 3.6.0** - Manipulação de datas
+- **Sonner 1.7.4** - Sistema de notificações toast
+
+### Backend/Integração
+- **Google Sheets API** - Armazenamento e sincronização de dados
+- **JWT Authentication** - Autenticação via Service Account
+
+## 📦 Pré-requisitos
+
+Antes de começar, você precisará ter instalado:
+
+- **Node.js** (versão 18 ou superior) - [Download](https://nodejs.org/)
+- **npm** ou **yarn** - Gerenciadores de pacotes
+- **Conta Google Cloud** - Para criar Service Account e obter credenciais
+- **Google Sheets** - Uma planilha para armazenar os dados
+
+## 🚀 Instalação
+
+1. **Clone o repositório**
+```bash
+git clone https://github.com/seu-usuario/sheet-finance.git
+cd sheet-finance
+```
+
+2. **Instale as dependências**
+```bash
+npm install
+```
+
+3. **Inicie o servidor de desenvolvimento**
+```bash
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+A aplicação estará disponível em `http://localhost:5173`
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+## ⚙️ Configuração
 
-**Use GitHub Codespaces**
+### 1. Configurar Google Cloud Service Account
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+1. Acesse o [Google Cloud Console](https://console.cloud.google.com/)
+2. Crie um novo projeto ou selecione um existente
+3. Ative a **Google Sheets API**
+4. Vá em **IAM & Admin > Service Accounts**
+5. Crie uma nova Service Account
+6. Baixe a chave JSON da Service Account
+7. Anote o **email da Service Account** e a **chave privada** (private_key)
 
-## What technologies are used for this project?
+### 2. Configurar Google Sheets
 
-This project is built with:
+1. Crie uma nova planilha no Google Sheets
+2. Compartilhe a planilha com o email da Service Account (permissão de Editor)
+3. Copie o **ID da Planilha** da URL:
+   ```
+   https://docs.google.com/spreadsheets/d/[ID_DA_PLANILHA]/edit
+   ```
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+### 3. Configurar na Aplicação
 
-## How can I deploy this project?
+1. Acesse a página **Configurações** na aplicação
+2. Preencha os campos:
+   - **Email da Service Account**: Email da Service Account criada
+   - **ID da Planilha**: ID copiado da URL da planilha
+   - **Chave Privada**: Private key do arquivo JSON (incluindo BEGIN e END)
+3. Clique em **Salvar Credenciais**
+4. Clique em **Conectar ao Google Sheets**
 
-Simply open [Lovable](https://lovable.dev/projects/8c689cd6-1f8e-497e-a57c-41783cd48a3c) and click on Share -> Publish.
+A aplicação criará automaticamente as abas necessárias na planilha:
+- `config` - Configurações do sistema
+- `transacoes` - Transações financeiras
+- `categorias` - Categorias personalizadas
+- `metas` - Metas financeiras
+- `movimentacoes_metas` - Movimentações das metas
+- `transacoes_recorrentes` - Transações recorrentes
+- `contas` - Contas a pagar/receber
 
-## Can I connect a custom domain to my Lovable project?
+## 💻 Uso
 
-Yes, you can!
+### Adicionar Transação
+1. Clique no botão **Nova Transação** no header
+2. Preencha os dados: tipo, descrição, valor, categoria, forma de pagamento
+3. Selecione a data
+4. Adicione observações (opcional)
+5. Clique em **Adicionar**
 
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
+### Criar Transação Recorrente
+1. Vá para a aba **Recorrentes** na página de Transações
+2. Clique em **Nova Recorrente**
+3. Configure a recorrência (mensal, bimestral, etc.)
+4. Defina a duração ou deixe até cancelamento
+5. Salve
 
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+### Criar Meta Financeira
+1. No Dashboard, vá para a seção **Metas Financeiras**
+2. Clique em **Nova Meta**
+3. Defina nome, valor alvo, prazo e cor
+4. Salve
+5. Use **Movimentação** para adicionar depósitos ou saques
+
+### Gerenciar Contas
+1. Vá para a aba **Contas** na página de Transações
+2. Clique em **Nova Conta**
+3. Escolha o tipo (Pagar/Receber)
+4. Preencha os dados e defina data de vencimento (opcional)
+5. Marque como paga quando necessário
+
+## 🌐 Deploy no GitHub Pages
+
+### 1. Configurar Vite para GitHub Pages
+
+O projeto já está configurado para funcionar no GitHub Pages. Certifique-se de que o `vite.config.ts` está configurado corretamente:
+
+```typescript
+export default defineConfig({
+  base: '/sheet-finance/', // Nome do seu repositório
+  // ... outras configurações
+})
+```
+
+### 2. Build do Projeto
+
+```bash
+npm run build
+```
+
+### 3. Deploy no GitHub Pages
+
+1. Vá para **Settings** do seu repositório no GitHub
+2. Navegue até **Pages** no menu lateral
+3. Em **Source**, selecione **GitHub Actions**
+4. Crie um arquivo `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/configure-pages@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+      - uses: actions/deploy-pages@v4
+```
+
+5. Faça commit e push das alterações
+6. O GitHub Actions fará o deploy automaticamente
+
+### 4. Acessar a Aplicação
+
+Após o deploy, sua aplicação estará disponível em:
+```
+https://seu-usuario.github.io/sheet-finance/
+```
+
+## 📁 Estrutura do Projeto
+
+```
+sheet-finance/
+├── public/                 # Arquivos estáticos
+│   ├── favicon.png        # Favicon da aplicação
+│   └── robots.txt         # Configuração para crawlers
+├── src/
+│   ├── components/        # Componentes React
+│   │   ├── finance/       # Componentes financeiros
+│   │   ├── layout/        # Componentes de layout
+│   │   └── ui/            # Componentes UI (shadcn)
+│   ├── contexts/          # Contextos React
+│   ├── data/              # Funções de processamento de dados
+│   ├── hooks/             # Custom hooks
+│   ├── pages/             # Páginas da aplicação
+│   ├── services/          # Serviços (Google Sheets API)
+│   ├── types/             # Definições TypeScript
+│   └── lib/               # Utilitários
+├── index.html             # HTML principal
+├── package.json           # Dependências do projeto
+├── vite.config.ts         # Configuração do Vite
+├── tailwind.config.ts     # Configuração do Tailwind
+└── tsconfig.json          # Configuração do TypeScript
+```
+
+## 🎨 Design Responsivo
+
+A aplicação é totalmente responsiva e otimizada para:
+- 📱 **Mobile** (smartphones)
+- 📱 **Tablets**
+- 💻 **Desktop**
+
+Todos os componentes se adaptam automaticamente ao tamanho da tela, proporcionando uma experiência otimizada em qualquer dispositivo.
+
+## 🔒 Segurança
+
+- As credenciais do Google Sheets são armazenadas apenas no **localStorage** do navegador
+- Nenhuma informação sensível é enviada para servidores externos
+- A autenticação é feita diretamente entre o navegador e a Google Sheets API
+- Recomenda-se usar uma Service Account dedicada apenas para este projeto
+
+## 🤝 Contribuindo
+
+Contribuições são bem-vindas! Sinta-se à vontade para:
+
+1. Fazer um Fork do projeto
+2. Criar uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abrir um Pull Request
+
+## 📝 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalhes.
+
+## 👤 Autor
+
+**Rafael Santos**
+
+- GitHub: [@seu-usuario](https://github.com/seu-usuario)
+
+## 🙏 Agradecimentos
+
+- [shadcn/ui](https://ui.shadcn.com/) - Componentes UI incríveis
+- [Recharts](https://recharts.org/) - Biblioteca de gráficos
+- [Google Sheets API](https://developers.google.com/sheets/api) - API de planilhas
+- [Vite](https://vitejs.dev/) - Build tool moderna
+- [React](https://react.dev/) - Biblioteca JavaScript
+
+---
+
+⭐ Se este projeto foi útil para você, considere dar uma estrela no repositório!
