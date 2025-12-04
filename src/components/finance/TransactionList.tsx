@@ -79,10 +79,10 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                   key={transaction.id}
                   className="flex items-center justify-between rounded-lg border border-border bg-card p-4 transition-all hover:shadow-sm"
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex flex-1 items-start gap-3 sm:gap-4">
                     <div
                       className={cn(
-                        'flex h-10 w-10 items-center justify-center rounded-full',
+                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
                         transaction.tipo === 'Receita'
                           ? 'bg-emerald-500/10'
                           : 'bg-rose-500/10'
@@ -94,13 +94,18 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                         <ArrowDownRight className="h-5 w-5 text-rose-600" />
                       )}
                     </div>
-                    <div className="space-y-1">
-                      <p className="font-medium">{transaction.descricao}</p>
-                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="truncate font-medium text-sm sm:text-base">{transaction.descricao}</p>
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs sm:gap-2 sm:text-sm text-muted-foreground">
                         <span>
-                          {format(new Date(transaction.data), "dd 'de' MMM", { locale: ptBR })}
+                          {(() => {
+                            // Parse date string safely to avoid timezone issues
+                            const [year, month, day] = transaction.data.split('-').map(Number);
+                            const date = new Date(year, month - 1, day);
+                            return format(date, "dd 'de' MMM", { locale: ptBR });
+                          })()}
                         </span>
-                        <span>•</span>
+                        <span className="hidden sm:inline">•</span>
                         <Badge 
                           variant="secondary" 
                           className="text-xs"
@@ -117,7 +122,7 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-2 sm:gap-3">
                     <span
                       className={cn(
                         'font-semibold',

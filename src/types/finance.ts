@@ -57,3 +57,69 @@ export interface TransactionFilters {
     fim: string | null;
   };
 }
+
+export type GoalTransactionType = 'deposito' | 'saque';
+
+export interface GoalTransaction {
+  id: string;
+  goal_id: string;
+  tipo: GoalTransactionType;
+  valor: number;
+  data: string;
+  observacao?: string;
+}
+
+export interface BalanceData {
+  month: string;
+  monthKey: string; // YYYY-MM format for sorting
+  entradas: number;
+  saidas: number;
+  investimentos: number;
+  investimentos_metas: number;
+  saldo: number;
+  saldo_acumulado: number;
+}
+
+export type RecurrenceType = 'mensal' | 'bimestral' | 'trimestral' | 'semestral' | 'anual';
+export type RecurrenceEndType = 'after_months' | 'until_cancelled';
+
+export interface RecurringTransaction {
+  id: string;
+  descricao: string;
+  tipo: TransactionType;
+  valor: number;
+  categoria: string;
+  forma_pagamento: PaymentMethod;
+  data_inicio: string; // YYYY-MM-DD
+  recorrencia: RecurrenceType;
+  fim_tipo: RecurrenceEndType;
+  meses_duracao?: number; // Se fim_tipo === 'after_months'
+  ativo: boolean;
+  observacao?: string;
+}
+
+export interface ForecastTransaction {
+  id: string;
+  recurring_id: string;
+  data: string; // YYYY-MM-DD
+  tipo: TransactionType;
+  descricao: string;
+  valor: number;
+  categoria: string;
+  forma_pagamento: PaymentMethod;
+  observacao?: string;
+}
+
+export type BillType = 'pagar' | 'receber';
+
+export interface Bill {
+  id: string;
+  tipo: BillType;
+  descricao: string;
+  valor: number;
+  categoria: string;
+  data_vencimento: string | null; // YYYY-MM-DD ou null
+  data_pagamento: string | null; // YYYY-MM-DD ou null (quando pago/recebido)
+  pago: boolean;
+  observacao?: string;
+}

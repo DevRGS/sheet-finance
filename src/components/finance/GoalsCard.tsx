@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Target, Plus, Edit2, Trash2, MoreHorizontal } from 'lucide-react';
+import { Target, Plus, Edit2, Trash2, MoreHorizontal, ArrowUpDown, History } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -22,6 +22,8 @@ import {
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { Goal } from '@/types/finance';
 import { GoalForm } from './GoalForm';
+import { GoalTransactionForm } from './GoalTransactionForm';
+import { GoalTransactionsList } from './GoalTransactionsList';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -30,6 +32,8 @@ export function GoalsCard() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [transactionGoal, setTransactionGoal] = useState<Goal | null>(null);
+  const [historyGoal, setHistoryGoal] = useState<Goal | null>(null);
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -144,6 +148,14 @@ export function GoalsCard() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => setTransactionGoal(goal)}>
+                            <ArrowUpDown className="mr-2 h-4 w-4" />
+                            Movimentação
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => setHistoryGoal(goal)}>
+                            <History className="mr-2 h-4 w-4" />
+                            Histórico
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => setEditingGoal(goal)}>
                             <Edit2 className="mr-2 h-4 w-4" />
                             Editar
@@ -202,6 +214,30 @@ export function GoalsCard() {
         }}
         goal={editingGoal}
       />
+
+      {transactionGoal && (
+        <GoalTransactionForm
+          open={!!transactionGoal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setTransactionGoal(null);
+            }
+          }}
+          goal={transactionGoal}
+        />
+      )}
+
+      {historyGoal && (
+        <GoalTransactionsList
+          open={!!historyGoal}
+          onOpenChange={(open) => {
+            if (!open) {
+              setHistoryGoal(null);
+            }
+          }}
+          goal={historyGoal}
+        />
+      )}
 
       <AlertDialog open={!!deletingId} onOpenChange={() => setDeletingId(null)}>
         <AlertDialogContent>

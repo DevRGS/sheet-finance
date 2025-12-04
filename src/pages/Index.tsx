@@ -22,17 +22,17 @@ const Index = () => {
     <AppLayout>
       <AppHeader title="Dashboard" onNewTransaction={() => setFormOpen(true)} />
       
-      <main className="flex-1 space-y-6 p-4 md:p-6">
+      <main className="flex-1 space-y-4 p-3 sm:space-y-6 sm:p-4 md:p-6">
         {/* Connection Alert */}
         {!isConnected && (
           <Alert className="border-amber-500/50 bg-amber-500/10">
             <AlertTriangle className="h-4 w-4 text-amber-600" />
             <AlertTitle className="text-amber-600">Modo offline</AlertTitle>
-            <AlertDescription className="flex items-center justify-between">
-              <span>
+            <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-sm sm:text-base">
                 Conecte ao Google Sheets para sincronizar seus dados.
               </span>
-              <Button variant="outline" size="sm" asChild className="ml-4">
+              <Button variant="outline" size="sm" asChild className="w-full sm:w-auto sm:ml-4">
                 <Link to="/configuracoes" className="gap-2">
                   <Cloud className="h-4 w-4" />
                   Configurar
@@ -44,15 +44,18 @@ const Index = () => {
 
         <DashboardStats />
 
-        <div className="grid gap-6 lg:grid-cols-3">
-          <MonthlyChart />
-          <CategoryChart />
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <MonthlyChart />
+          </div>
+          <div className="lg:col-span-1">
+            <CategoryChart />
+          </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <BalanceChart />
-          <GoalsCard />
-        </div>
+        <BalanceChart />
+
+        <GoalsCard />
 
         {transactions.length > 0 && <RecentTransactions />}
       </main>

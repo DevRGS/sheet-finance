@@ -73,20 +73,20 @@ const Categorias = () => {
     <AppLayout>
       <AppHeader title="Categorias" />
 
-      <main className="flex-1 space-y-6 p-4 md:p-6">
+      <main className="flex-1 space-y-4 p-3 sm:space-y-6 sm:p-4 md:p-6">
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Tag className="h-5 w-5" />
+          <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="flex items-center gap-2 text-base sm:text-lg">
+              <Tag className="h-4 w-4 sm:h-5 sm:w-5" />
               Categorias de Transações
             </CardTitle>
-            <Button onClick={() => setFormOpen(true)} className="gap-2">
+            <Button onClick={() => setFormOpen(true)} className="gap-2 w-full sm:w-auto">
               <Plus className="h-4 w-4" />
-              Nova Categoria
+              <span className="text-sm sm:text-base">Nova Categoria</span>
             </Button>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="grid gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {categories.map((category) => {
                 const total = getCategoryTotal(category.nome);
                 const transactionCount = getCategoryTransactionCount(category.nome);

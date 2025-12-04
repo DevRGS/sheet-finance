@@ -10,6 +10,11 @@ interface SheetRequest {
   sheet?: string;
   data?: Record<string, unknown>[];
   rowIndex?: number;
+  credentials?: {
+    email: string;
+    sheetsId: string;
+    privateKey: string;
+  };
 }
 
 async function getAccessToken(email: string, privateKey: string): Promise<string> {
@@ -127,8 +132,8 @@ async function ensureSheetExists(accessToken: string, sheetsId: string, sheetNam
       });
       console.log(`Created sheet: ${sheetName}`);
 
-      // Add headers
-      await sheetsRequest(accessToken, sheetsId, `/values/${sheetName}!A1:append?valueInputOption=RAW`, 'POST', {
+      // Add headers - use SheetName:append format
+      await sheetsRequest(accessToken, sheetsId, `/values/${sheetName}:append?valueInputOption=RAW`, 'POST', {
         values: [headers]
       });
       console.log(`Added headers to: ${sheetName}`);
@@ -168,7 +173,7 @@ async function initializeSpreadsheet(accessToken: string, sheetsId: string): Pro
       ['8', 'Outros', '#6b7280'],
     ];
     
-    await sheetsRequest(accessToken, sheetsId, '/values/categorias!A2:append?valueInputOption=RAW', 'POST', {
+    await sheetsRequest(accessToken, sheetsId, '/values/categorias:append?valueInputOption=RAW', 'POST', {
       values: defaultCategories
     });
     console.log('Added default categories');
@@ -177,7 +182,7 @@ async function initializeSpreadsheet(accessToken: string, sheetsId: string): Pro
   // Add config entries
   const configData = await sheetsRequest(accessToken, sheetsId, '/values/config!A2:B') as { values?: string[][] };
   if (!configData.values || configData.values.length === 0) {
-    await sheetsRequest(accessToken, sheetsId, '/values/config!A2:append?valueInputOption=RAW', 'POST', {
+    await sheetsRequest(accessToken, sheetsId, '/values/config:append?valueInputOption=RAW', 'POST', {
       values: [
         ['data_criacao', new Date().toISOString()],
         ['versao', '1.0.0'],
@@ -209,15 +214,54 @@ async function appendToSheet(
   sheet: string,
   data: Record<string, unknown>[]
 ): Promise<void> {
-  // Get headers first
-  const headersResponse = await sheetsRequest(accessToken, sheetsId, `/values/${sheet}!1:1`) as { values?: string[][] };
-  const headers = headersResponse.values?.[0] || [];
+  try {
+    // Get headers first
+    console.log(`Getting headers for sheet: ${sheet}`);
+    const headersResponse = await sheetsRequest(accessToken, sheetsId, `/values/${sheet}!1:1`) as { values?: string[][] };
+    const headers = headersResponse.values?.[0] || [];
 
-  const rows = data.map(item => headers.map(header => item[header] ?? ''));
-  
-  await sheetsRequest(accessToken, sheetsId, `/values/${sheet}!A:append?valueInputOption=RAW`, 'POST', {
-    values: rows
-  });
+    if (!headers || headers.length === 0) {
+      throw new Error(`No headers found for sheet: ${sheet}. Make sure the sheet exists and has headers in row 1.`);
+    }
+
+    console.log(`Headers for ${sheet}:`, headers);
+    console.log(`Data to append:`, JSON.stringify(data, null, 2));
+
+    const rows = data.map(item => {
+      const row = headers.map(header => {
+        const value = item[header];
+        // Convert all values to strings for RAW input
+        if (value === null || value === undefined) {
+          return '';
+        }
+        return String(value);
+      });
+      console.log(`Row mapped (${row.length} columns):`, row);
+      return row;
+    });
+    
+    console.log(`Appending ${rows.length} row(s) to ${sheet} with ${headers.length} columns`);
+    
+    // Use the correct format for append: /values/{range}:append
+    // The range should be just the sheet name, not SheetName!A:append
+    // The API will automatically append to the next available row
+    const endpoint = `/values/${sheet}:append?valueInputOption=RAW`;
+    console.log(`Making append request to: ${endpoint}`);
+    
+    const requestBody = {
+      values: rows
+    };
+    
+    console.log(`Request body:`, JSON.stringify(requestBody, null, 2));
+    
+    await sheetsRequest(accessToken, sheetsId, endpoint, 'POST', requestBody);
+    
+    console.log(`Successfully appended data to ${sheet}`);
+  } catch (error) {
+    console.error(`Error in appendToSheet for ${sheet}:`, error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to append to sheet ${sheet}: ${errorMessage}`);
+  }
 }
 
 async function updateInSheet(
@@ -230,7 +274,14 @@ async function updateInSheet(
   const headersResponse = await sheetsRequest(accessToken, sheetsId, `/values/${sheet}!1:1`) as { values?: string[][] };
   const headers = headersResponse.values?.[0] || [];
 
-  const row = headers.map(header => data[header] ?? '');
+  const row = headers.map(header => {
+    const value = data[header];
+    // Convert all values to strings for RAW input
+    if (value === null || value === undefined) {
+      return '';
+    }
+    return String(value);
+  });
   const range = `${sheet}!A${rowIndex + 2}:${String.fromCharCode(64 + headers.length)}${rowIndex + 2}`;
   
   await sheetsRequest(accessToken, sheetsId, `/values/${range}?valueInputOption=RAW`, 'PUT', {
@@ -275,20 +326,21 @@ serve(async (req) => {
   }
 
   try {
-    const email = Deno.env.get('GOOGLE_SERVICE_ACCOUNT_EMAIL');
-    const sheetsId = Deno.env.get('GOOGLE_SHEETS_ID');
-    const privateKey = Deno.env.get('GOOGLE_PRIVATE_KEY');
+    const body: SheetRequest = await req.json();
+    const { action, sheet, data, rowIndex, credentials } = body;
+
+    // Get credentials from request body or environment variables (fallback)
+    const email = credentials?.email || Deno.env.get('GOOGLE_SERVICE_ACCOUNT_EMAIL');
+    const sheetsId = credentials?.sheetsId || Deno.env.get('GOOGLE_SHEETS_ID');
+    const privateKey = credentials?.privateKey || Deno.env.get('GOOGLE_PRIVATE_KEY');
 
     if (!email || !sheetsId || !privateKey) {
       console.error('Missing credentials');
       return new Response(
-        JSON.stringify({ error: 'Credenciais não configuradas', code: 'MISSING_CREDENTIALS' }),
+        JSON.stringify({ error: 'Credenciais não configuradas. Configure na página de Configurações.', code: 'MISSING_CREDENTIALS' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-
-    const body: SheetRequest = await req.json();
-    const { action, sheet, data, rowIndex } = body;
 
     console.log(`Processing action: ${action} for sheet: ${sheet || 'N/A'}`);
 
@@ -314,7 +366,13 @@ serve(async (req) => {
         break;
 
       case 'append':
-        if (!sheet || !data) throw new Error('Sheet name and data required');
+        if (!sheet || !data) {
+          throw new Error('Sheet name and data required');
+        }
+        if (!Array.isArray(data)) {
+          throw new Error('Data must be an array');
+        }
+        console.log(`Appending to sheet ${sheet} with ${data.length} item(s)`);
         await appendToSheet(accessToken, sheetsId, sheet, data);
         result = { success: true };
         break;
@@ -344,10 +402,24 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
-    console.error('Error:', error);
+    console.error('Error in Edge Function:', error);
     const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    console.error('Error details:', {
+      message: errorMessage,
+      stack: errorStack,
+      errorType: error?.constructor?.name,
+    });
+    
+    // Return a more detailed error message
+    const errorResponse = {
+      error: errorMessage,
+      ...(errorStack && { stack: errorStack }),
+    };
+    
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify(errorResponse),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

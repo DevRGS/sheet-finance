@@ -65,7 +65,11 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
     resolver: zodResolver(formSchema),
     defaultValues: transaction
       ? {
-          data: new Date(transaction.data),
+          data: (() => {
+            // Parse date string safely to avoid timezone issues
+            const [year, month, day] = transaction.data.split('-').map(Number);
+            return new Date(year, month - 1, day);
+          })(),
           tipo: transaction.tipo,
           descricao: transaction.descricao,
           valor: transaction.valor.toString(),
@@ -83,7 +87,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
         },
   });
 
-  const onSubmit = (data: FormData) => {
+  const onSubmit = async (data: FormData) => {
     const transactionData = {
       data: format(data.data, 'yyyy-MM-dd'),
       tipo: data.tipo as TransactionType,
@@ -91,24 +95,40 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
       valor: parseFloat(data.valor.replace(',', '.')),
       categoria: data.categoria,
       forma_pagamento: data.forma_pagamento as PaymentMethod,
-      observacao: data.observacao,
+      observacao: data.observacao || '',
     };
 
-    if (transaction) {
-      updateTransaction(transaction.id, transactionData);
-      toast.success('Transação atualizada com sucesso!');
-    } else {
-      addTransaction(transactionData);
-      toast.success('Transação cadastrada com sucesso!');
-    }
+    try {
+      let success = false;
+      if (transaction) {
+        success = await updateTransaction(transaction.id, transactionData);
+        if (success) {
+          toast.success('Transação atualizada com sucesso!');
+        } else {
+          toast.error('Erro ao atualizar transação. Tente novamente.');
+          return;
+        }
+      } else {
+        success = await addTransaction(transactionData);
+        if (success) {
+          toast.success('Transação cadastrada com sucesso!');
+        } else {
+          toast.error('Erro ao cadastrar transação. Tente novamente.');
+          return;
+        }
+      }
 
-    form.reset();
-    onOpenChange(false);
+      form.reset();
+      onOpenChange(false);
+    } catch (error) {
+      console.error('Error submitting transaction:', error);
+      toast.error('Erro ao processar transação. Tente novamente.');
+    }
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[500px]">
+      <DialogContent className="max-h-[90vh] overflow-y-auto w-[95vw] sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>{transaction ? 'Editar Transação' : 'Nova Transação'}</DialogTitle>
           <DialogDescription>
@@ -120,7 +140,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
               <FormField
                 control={form.control}
                 name="tipo"
@@ -210,7 +230,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
               )}
             />
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
               <FormField
                 control={form.control}
                 name="valor"
