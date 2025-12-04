@@ -33,13 +33,13 @@ interface TransactionListProps {
 }
 
 export function TransactionList({ limit, showTitle = true }: TransactionListProps) {
-  const { transactions, deleteTransaction } = useFinanceContext();
+  const { filteredTransactions, deleteTransaction, categories } = useFinanceContext();
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const displayedTransactions = limit
-    ? transactions.slice(0, limit)
-    : transactions;
+    ? filteredTransactions.slice(0, limit)
+    : filteredTransactions;
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -48,8 +48,13 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
     }).format(value);
   };
 
-  const handleDelete = (id: string) => {
-    deleteTransaction(id);
+  const getCategoryColor = (categoryName: string) => {
+    const category = categories.find(c => c.nome === categoryName);
+    return category?.cor || '#6b7280';
+  };
+
+  const handleDelete = async (id: string) => {
+    await deleteTransaction(id);
     setDeletingId(null);
     toast.success('Transação excluída com sucesso!');
   };
@@ -66,7 +71,7 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
           <div className="space-y-3">
             {displayedTransactions.length === 0 ? (
               <div className="py-8 text-center text-muted-foreground">
-                Nenhuma transação cadastrada
+                Nenhuma transação encontrada
               </div>
             ) : (
               displayedTransactions.map((transaction) => (
@@ -96,9 +101,18 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                           {format(new Date(transaction.data), "dd 'de' MMM", { locale: ptBR })}
                         </span>
                         <span>•</span>
-                        <Badge variant="secondary" className="text-xs">
+                        <Badge 
+                          variant="secondary" 
+                          className="text-xs"
+                          style={{ 
+                            backgroundColor: `${getCategoryColor(transaction.categoria)}20`,
+                            color: getCategoryColor(transaction.categoria),
+                          }}
+                        >
                           {transaction.categoria}
                         </Badge>
+                        <span className="hidden sm:inline">•</span>
+                        <span className="hidden text-xs sm:inline">{transaction.forma_pagamento}</span>
                       </div>
                     </div>
                   </div>
