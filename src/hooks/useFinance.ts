@@ -445,13 +445,32 @@ export function useFinance() {
       (t) => t.data.substring(0, 7) === currentMonth
     );
 
-    const receitasMes = currentMonthTransactions
+    let receitasMes = currentMonthTransactions
       .filter((t) => t.tipo === 'Receita')
       .reduce((sum, t) => sum + t.valor, 0);
 
-    const despesasMes = currentMonthTransactions
+    let despesasMes = currentMonthTransactions
       .filter((t) => t.tipo === 'Despesa')
       .reduce((sum, t) => sum + t.valor, 0);
+
+    // Adicionar bills do mês atual
+    bills.forEach((bill) => {
+      if (bill.tipo === 'pagar') {
+        // Contas a pagar: usar data_vencimento se não paga, ou data_pagamento se paga
+        const dateToUse = bill.pago && bill.data_pagamento 
+          ? bill.data_pagamento 
+          : (bill.data_vencimento || new Date().toISOString().substring(0, 10));
+        
+        if (dateToUse.substring(0, 7) === currentMonth) {
+          despesasMes += bill.valor;
+        }
+      } else if (bill.tipo === 'receber') {
+        // Contas a receber: só contar como receita se foi recebida
+        if (bill.pago && bill.data_pagamento && bill.data_pagamento.substring(0, 7) === currentMonth) {
+          receitasMes += bill.valor;
+        }
+      }
+    });
 
     return {
       totalReceitas,
@@ -461,7 +480,7 @@ export function useFinance() {
       despesasMes,
       saldoMes: receitasMes - despesasMes,
     };
-  }, [transactions]);
+  }, [transactions, bills]);
 
   const monthlyData = useMemo(() => getMonthlyData(transactions, bills), [transactions, bills]);
   const categoryData = useMemo(() => getCategoryData(transactions, categories, bills), [transactions, categories, bills]);

@@ -110,6 +110,7 @@ export function BalanceChart() {
           investimentos_metas: 0,
           saldo: 0,
           saldo_acumulado: accumulated,
+          receita_prevista: 0,
         });
       }
     }
@@ -228,6 +229,7 @@ export function BalanceChart() {
           investimentos_metas: 0,
           saldo: 0,
           saldo_acumulado: accumulated,
+          receita_prevista: 0,
           entradas_compare: null,
           saidas_compare: null,
           investimentos_compare: null,
@@ -501,6 +503,17 @@ export function BalanceChart() {
                   dot={{ r: 4 }}
                 />
               )}
+              
+              {/* Receita Prevista Line */}
+              <Line
+                type="monotone"
+                dataKey="receita_prevista"
+                name="Total de Receita Prevista"
+                stroke="hsl(150 60% 45% / 0.6)"
+                strokeWidth={2}
+                strokeDasharray="3 3"
+                dot={{ r: 3 }}
+              />
             </ComposedChart>
           </ResponsiveContainer>
         </div>

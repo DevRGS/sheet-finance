@@ -27,19 +27,26 @@ export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []):
     monthlyMap.set(month, current);
   });
 
-  // Processar contas pagas/recebidas usando data_pagamento
+  // Processar contas
   bills.forEach((bill) => {
-    if (bill.pago && bill.data_pagamento) {
-      const month = bill.data_pagamento.substring(0, 7); // YYYY-MM
+    if (bill.tipo === 'pagar') {
+      // Contas a pagar: usar data_vencimento se não paga, ou data_pagamento se paga
+      const dateToUse = bill.pago && bill.data_pagamento 
+        ? bill.data_pagamento 
+        : (bill.data_vencimento || new Date().toISOString().substring(0, 10));
+      
+      const month = dateToUse.substring(0, 7); // YYYY-MM
       const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
-
-      if (bill.tipo === 'receber') {
-        current.receitas += bill.valor;
-      } else if (bill.tipo === 'pagar') {
-        current.despesas += bill.valor;
-      }
-
+      current.despesas += bill.valor;
       monthlyMap.set(month, current);
+    } else if (bill.tipo === 'receber') {
+      // Contas a receber: só contar como receita se foi recebida
+      if (bill.pago && bill.data_pagamento) {
+        const month = bill.data_pagamento.substring(0, 7); // YYYY-MM
+        const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
+        current.receitas += bill.valor;
+        monthlyMap.set(month, current);
+      }
     }
   });
 
@@ -63,9 +70,9 @@ export const getCategoryData = (transactions: Transaction[], categories: Categor
       categoryMap.set(t.categoria, current + t.valor);
     });
 
-  // Processar contas a pagar pagas usando data_pagamento
+  // Processar contas a pagar (pagas ou não pagas)
   bills
-    .filter((bill) => bill.tipo === 'pagar' && bill.pago && bill.data_pagamento)
+    .filter((bill) => bill.tipo === 'pagar')
     .forEach((bill) => {
       const current = categoryMap.get(bill.categoria) || 0;
       categoryMap.set(bill.categoria, current + bill.valor);
@@ -185,6 +192,7 @@ export const getBalanceData = (
       saidas: 0,
       investimentos: 0,
       investimentos_metas: 0,
+      receita_prevista: 0,
     });
   }
 
@@ -241,29 +249,63 @@ export const getBalanceData = (
     monthlyMap.set(monthKey, current);
   });
 
-  // Processar contas pagas/recebidas usando data_pagamento - ONLY for selected year
+  // Processar contas - ONLY for selected year
   bills.forEach((bill) => {
-    if (bill.pago && bill.data_pagamento) {
-      const { year: billYear } = parseDateString(bill.data_pagamento);
+    if (bill.tipo === 'pagar') {
+      // Contas a pagar: usar data_vencimento se não paga, ou data_pagamento se paga
+      const dateToUse = bill.pago && bill.data_pagamento 
+        ? bill.data_pagamento 
+        : (bill.data_vencimento || new Date().toISOString().substring(0, 10));
+      
+      const { year: billYear } = parseDateString(dateToUse);
       if (billYear !== selectedYear) {
         return;
       }
       
-      const monthKey = bill.data_pagamento.substring(0, 7); // YYYY-MM
+      const monthKey = dateToUse.substring(0, 7); // YYYY-MM
       if (!monthKey.startsWith(`${selectedYear}-`)) {
         return;
       }
       
       const current = monthlyMap.get(monthKey);
       if (!current) return;
-
-      if (bill.tipo === 'receber') {
-        current.entradas += bill.valor;
-      } else if (bill.tipo === 'pagar') {
-        current.saidas += bill.valor;
-      }
-      
+      current.saidas += bill.valor;
       monthlyMap.set(monthKey, current);
+    } else if (bill.tipo === 'receber') {
+      if (bill.pago && bill.data_pagamento) {
+        // Conta recebida: usar data_pagamento
+        const { year: billYear } = parseDateString(bill.data_pagamento);
+        if (billYear !== selectedYear) {
+          return;
+        }
+        
+        const monthKey = bill.data_pagamento.substring(0, 7); // YYYY-MM
+        if (!monthKey.startsWith(`${selectedYear}-`)) {
+          return;
+        }
+        
+        const current = monthlyMap.get(monthKey);
+        if (!current) return;
+        current.entradas += bill.valor;
+        monthlyMap.set(monthKey, current);
+      } else {
+        // Conta não recebida: adicionar como receita prevista usando data_vencimento ou data atual
+        const dateToUse = bill.data_vencimento || new Date().toISOString().substring(0, 10);
+        const { year: billYear } = parseDateString(dateToUse);
+        if (billYear !== selectedYear) {
+          return;
+        }
+        
+        const monthKey = dateToUse.substring(0, 7); // YYYY-MM
+        if (!monthKey.startsWith(`${selectedYear}-`)) {
+          return;
+        }
+        
+        const current = monthlyMap.get(monthKey);
+        if (!current) return;
+        current.receita_prevista += bill.valor;
+        monthlyMap.set(monthKey, current);
+      }
     }
   });
 
@@ -303,6 +345,7 @@ export const getBalanceData = (
         investimentos_metas: monthData.investimentos_metas,
         saldo,
         saldo_acumulado: accumulated,
+        receita_prevista: monthData.receita_prevista || 0,
       });
     } else {
       finalBalanceData.push({
@@ -314,6 +357,7 @@ export const getBalanceData = (
         investimentos_metas: 0,
         saldo: 0,
         saldo_acumulado: accumulated,
+        receita_prevista: 0,
       });
     }
   }

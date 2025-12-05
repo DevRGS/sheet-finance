@@ -78,6 +78,7 @@ export interface BalanceData {
   investimentos_metas: number;
   saldo: number;
   saldo_acumulado: number;
+  receita_prevista?: number; // Receitas previstas de contas a receber não recebidas
 }
 
 export type RecurrenceType = 'mensal' | 'bimestral' | 'trimestral' | 'semestral' | 'anual';
