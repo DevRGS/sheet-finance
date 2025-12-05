@@ -51,12 +51,17 @@ export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []):
   });
 
   return Array.from(monthlyMap.entries())
-    .map(([month, data]) => ({
-      month: new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
-      receitas: data.receitas,
-      despesas: data.despesas,
-      saldo: data.receitas - data.despesas,
-    }))
+    .map(([month, data]) => {
+      // Parsear manualmente para evitar problemas de timezone
+      const [year, monthNum] = month.split('-').map(Number);
+      const date = new Date(year, monthNum - 1, 1);
+      return {
+        month: date.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
+        receitas: data.receitas,
+        despesas: data.despesas,
+        saldo: data.receitas - data.despesas,
+      };
+    })
     .sort((a, b) => a.month.localeCompare(b.month));
 };
 
@@ -182,6 +187,7 @@ export const getBalanceData = (
     saidas: number;
     investimentos: number;
     investimentos_metas: number;
+    receita_prevista: number;
   }>();
 
   // Initialize all 12 months for selected year ONLY

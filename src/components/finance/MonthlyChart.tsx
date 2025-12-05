@@ -27,7 +27,7 @@ export function MonthlyChart() {
   const chartData = useMemo(() => {
     const today = new Date();
     const currentYear = today.getFullYear();
-    const currentMonth = today.getMonth() + 1; // 1-12
+    const currentMonth = today.getMonth() + 1; // 1-12 (getMonth retorna 0-11, então +1)
     
     // Calcular mês anterior
     let previousMonth = currentMonth - 1;
@@ -42,9 +42,13 @@ export function MonthlyChart() {
     const previousMonthKey = `${previousYear}-${String(previousMonth).padStart(2, '0')}`;
     
     // Função para criar o monthLabel exatamente como no getMonthlyData
+    // Usar exatamente a mesma lógica: new Date(month + '-01')
     const createMonthLabel = (monthKey: string): string => {
-      // Usar exatamente a mesma lógica: new Date(month + '-01')
-      return new Date(monthKey + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+      // Parsear manualmente para evitar problemas de timezone
+      const [year, month] = monthKey.split('-').map(Number);
+      // Criar data localmente (year, month - 1, day) para evitar timezone
+      const date = new Date(year, month - 1, 1);
+      return date.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
     };
     
     // Buscar dados do monthlyData comparando diretamente os labels
