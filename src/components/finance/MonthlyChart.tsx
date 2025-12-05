@@ -37,58 +37,28 @@ export function MonthlyChart() {
       previousYear = currentYear - 1;
     }
     
-    // Criar monthKeys no formato YYYY-MM
+    // Criar monthKeys no formato YYYY-MM (mesmo formato usado no getMonthlyData)
     const currentMonthKey = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
     const previousMonthKey = `${previousYear}-${String(previousMonth).padStart(2, '0')}`;
     
-    // Função para reconstruir monthKey a partir do month string do monthlyData
-    const getMonthKeyFromLabel = (monthLabel: string): string | null => {
-      // O formato é "nov de 24" ou "dez de 24"
-      // Precisamos extrair o mês e ano e reconstruir o monthKey
-      try {
-        // Tentar parsear a string do mês
-        const parts = monthLabel.split(' de ');
-        if (parts.length !== 2) return null;
-        
-        const monthName = parts[0].trim().toLowerCase();
-        const yearStr = parts[1].trim();
-        
-        // Mapear nomes de meses em português
-        const monthMap: { [key: string]: number } = {
-          'jan': 1, 'fev': 2, 'mar': 3, 'abr': 4, 'mai': 5, 'jun': 6,
-          'jul': 7, 'ago': 8, 'set': 9, 'out': 10, 'nov': 11, 'dez': 12
-        };
-        
-        const monthNum = monthMap[monthName];
-        if (!monthNum) return null;
-        
-        // Converter ano de 2 dígitos para 4 dígitos
-        const yearNum = parseInt(yearStr, 10);
-        const fullYear = yearNum < 50 ? 2000 + yearNum : 1900 + yearNum;
-        
-        return `${fullYear}-${String(monthNum).padStart(2, '0')}`;
-      } catch {
-        return null;
-      }
+    // Função para criar o monthLabel exatamente como no getMonthlyData
+    const createMonthLabel = (monthKey: string): string => {
+      // Usar exatamente a mesma lógica: new Date(month + '-01')
+      return new Date(monthKey + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
     };
     
-    // Buscar dados do monthlyData usando monthKey
+    // Buscar dados do monthlyData comparando diretamente os labels
     const findDataByMonthKey = (monthKey: string) => {
-      // Buscar no monthlyData comparando os monthKeys
-      const found = monthlyData.find(d => {
-        const dataMonthKey = getMonthKeyFromLabel(d.month);
-        return dataMonthKey === monthKey;
-      });
+      const monthLabel = createMonthLabel(monthKey);
+      
+      // Buscar no monthlyData comparando diretamente o month string
+      const found = monthlyData.find(d => d.month === monthLabel);
       
       if (found) {
         return found;
       }
       
-      // Se não encontrou, criar dados vazios com o label correto
-      const [year, month] = monthKey.split('-').map(Number);
-      const monthDate = new Date(year, month - 1, 1);
-      const monthLabel = monthDate.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
-      
+      // Se não encontrou, criar dados vazios
       return {
         month: monthLabel,
         receitas: 0,
