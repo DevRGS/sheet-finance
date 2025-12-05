@@ -1,4 +1,4 @@
-import { Transaction, Category, MonthlyData, CategoryData, BalanceData, GoalTransaction, ForecastTransaction } from '@/types/finance';
+import { Transaction, Category, MonthlyData, CategoryData, BalanceData, GoalTransaction, ForecastTransaction, Bill } from '@/types/finance';
 
 export const defaultCategories: Category[] = [
   { id: '1', nome: 'Alimentação', cor: '#a78bfa' },
@@ -11,7 +11,7 @@ export const defaultCategories: Category[] = [
   { id: '8', nome: 'Outros', cor: '#6b7280' },
 ];
 
-export const getMonthlyData = (transactions: Transaction[]): MonthlyData[] => {
+export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []): MonthlyData[] => {
   const monthlyMap = new Map<string, { receitas: number; despesas: number }>();
 
   transactions.forEach((t) => {
@@ -27,6 +27,22 @@ export const getMonthlyData = (transactions: Transaction[]): MonthlyData[] => {
     monthlyMap.set(month, current);
   });
 
+  // Processar contas pagas/recebidas usando data_pagamento
+  bills.forEach((bill) => {
+    if (bill.pago && bill.data_pagamento) {
+      const month = bill.data_pagamento.substring(0, 7); // YYYY-MM
+      const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
+
+      if (bill.tipo === 'receber') {
+        current.receitas += bill.valor;
+      } else if (bill.tipo === 'pagar') {
+        current.despesas += bill.valor;
+      }
+
+      monthlyMap.set(month, current);
+    }
+  });
+
   return Array.from(monthlyMap.entries())
     .map(([month, data]) => ({
       month: new Date(month + '-01').toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
@@ -37,7 +53,7 @@ export const getMonthlyData = (transactions: Transaction[]): MonthlyData[] => {
     .sort((a, b) => a.month.localeCompare(b.month));
 };
 
-export const getCategoryData = (transactions: Transaction[], categories: Category[]): CategoryData[] => {
+export const getCategoryData = (transactions: Transaction[], categories: Category[], bills: Bill[] = []): CategoryData[] => {
   const categoryMap = new Map<string, number>();
 
   transactions
@@ -45,6 +61,14 @@ export const getCategoryData = (transactions: Transaction[], categories: Categor
     .forEach((t) => {
       const current = categoryMap.get(t.categoria) || 0;
       categoryMap.set(t.categoria, current + t.valor);
+    });
+
+  // Processar contas a pagar pagas usando data_pagamento
+  bills
+    .filter((bill) => bill.tipo === 'pagar' && bill.pago && bill.data_pagamento)
+    .forEach((bill) => {
+      const current = categoryMap.get(bill.categoria) || 0;
+      categoryMap.set(bill.categoria, current + bill.valor);
     });
 
   return Array.from(categoryMap.entries()).map(([categoria, valor]) => ({
@@ -58,7 +82,8 @@ export const getBalanceData = (
   transactions: Transaction[],
   goalTransactions: GoalTransaction[],
   year?: number,
-  forecastTransactions?: ForecastTransaction[]
+  forecastTransactions?: ForecastTransaction[],
+  bills: Bill[] = []
 ): BalanceData[] => {
   const selectedYear = year || new Date().getFullYear();
   const today = new Date();
@@ -214,6 +239,32 @@ export const getBalanceData = (
       }
     }
     monthlyMap.set(monthKey, current);
+  });
+
+  // Processar contas pagas/recebidas usando data_pagamento - ONLY for selected year
+  bills.forEach((bill) => {
+    if (bill.pago && bill.data_pagamento) {
+      const { year: billYear } = parseDateString(bill.data_pagamento);
+      if (billYear !== selectedYear) {
+        return;
+      }
+      
+      const monthKey = bill.data_pagamento.substring(0, 7); // YYYY-MM
+      if (!monthKey.startsWith(`${selectedYear}-`)) {
+        return;
+      }
+      
+      const current = monthlyMap.get(monthKey);
+      if (!current) return;
+
+      if (bill.tipo === 'receber') {
+        current.entradas += bill.valor;
+      } else if (bill.tipo === 'pagar') {
+        current.saidas += bill.valor;
+      }
+      
+      monthlyMap.set(monthKey, current);
+    }
   });
 
   // Build final array with EXACTLY 12 months for selected year, in order

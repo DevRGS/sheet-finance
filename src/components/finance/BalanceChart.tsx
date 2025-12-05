@@ -24,7 +24,7 @@ import {
 } from 'recharts';
 
 export function BalanceChart() {
-  const { transactions, goalTransactions, forecastTransactions } = useFinanceContext();
+  const { transactions, goalTransactions, forecastTransactions, bills } = useFinanceContext();
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
   const [compareYear, setCompareYear] = useState<number | null>(null);
 
@@ -56,13 +56,21 @@ export function BalanceChart() {
       }
     });
 
+    // Adicionar anos das contas pagas
+    bills.forEach((bill) => {
+      if (bill.pago && bill.data_pagamento) {
+        const year = parseDateString(bill.data_pagamento);
+        years.add(year);
+      }
+    });
+
     years.add(currentYear);
     return Array.from(years).sort((a, b) => b - a);
-  }, [transactions, goalTransactions, forecastTransactions]);
+  }, [transactions, goalTransactions, forecastTransactions, bills]);
 
   // Calculate balance data for selected year - SIMPLIFIED
   const balanceData = useMemo(() => {
-    const data = getBalanceData(transactions, goalTransactions, selectedYear, forecastTransactions);
+    const data = getBalanceData(transactions, goalTransactions, selectedYear, forecastTransactions, bills);
     
     // STRICT: Filter to ensure all data belongs to selected year
     const filtered = data.filter(item => {
@@ -112,17 +120,17 @@ export function BalanceChart() {
     }
     
     return result;
-  }, [transactions, goalTransactions, selectedYear, forecastTransactions]);
+  }, [transactions, goalTransactions, selectedYear, forecastTransactions, bills]);
 
   // Calculate balance data for comparison year
   const compareData = useMemo(() => {
     if (!compareYear) return null;
-    const data = getBalanceData(transactions, goalTransactions, compareYear, forecastTransactions);
+    const data = getBalanceData(transactions, goalTransactions, compareYear, forecastTransactions, bills);
     return data.filter(item => {
       const itemYear = parseInt(item.monthKey.substring(0, 4));
       return itemYear === compareYear;
     });
-  }, [transactions, goalTransactions, compareYear, forecastTransactions]);
+  }, [transactions, goalTransactions, compareYear, forecastTransactions, bills]);
 
   // Combine data for comparison - SIMPLIFIED
   const chartData = useMemo(() => {

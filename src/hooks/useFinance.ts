@@ -463,9 +463,9 @@ export function useFinance() {
     };
   }, [transactions]);
 
-  const monthlyData = useMemo(() => getMonthlyData(transactions), [transactions]);
-  const categoryData = useMemo(() => getCategoryData(transactions, categories), [transactions, categories]);
-  const balanceData = useMemo(() => getBalanceData(transactions, goalTransactions), [transactions, goalTransactions]);
+  const monthlyData = useMemo(() => getMonthlyData(transactions, bills), [transactions, bills]);
+  const categoryData = useMemo(() => getCategoryData(transactions, categories, bills), [transactions, categories, bills]);
+  const balanceData = useMemo(() => getBalanceData(transactions, goalTransactions, undefined, undefined, bills), [transactions, goalTransactions, bills]);
   
   // Generate forecast transactions
   const forecastTransactions = useMemo(() => {
