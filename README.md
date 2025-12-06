@@ -326,7 +326,7 @@ Este projeto está sob a licença MIT. Veja o arquivo `LICENSE` para mais detalh
 
 **Rafael Santos**
 
-- GitHub: [@seu-usuario](https://github.com/seu-usuario)
+- GitHub: [@DevRGS](https://github.com/DevRGS)
 
 ## 🙏 Agradecimentos
 
