@@ -6,80 +6,107 @@ const corsHeaders = {
 };
 
 interface SheetRequest {
-  action: 'test' | 'read' | 'append' | 'update' | 'delete' | 'init';
+  action: 'test' | 'read' | 'append' | 'update' | 'delete' | 'init' | 'oauth-callback';
   sheet?: string;
   data?: Record<string, unknown>[];
   rowIndex?: number;
   credentials?: {
-    email: string;
     sheetsId: string;
-    privateKey: string;
+    refreshToken?: string;
+    accessToken?: string;
+    tokenExpiry?: number;
   };
+  code?: string; // Para callback OAuth
+  state?: string; // Para callback OAuth
 }
 
-async function getAccessToken(email: string, privateKey: string): Promise<string> {
-  const header = { alg: 'RS256', typ: 'JWT' };
-  const now = Math.floor(Date.now() / 1000);
-  const claim = {
-    iss: email,
-    scope: 'https://www.googleapis.com/auth/spreadsheets',
-    aud: 'https://oauth2.googleapis.com/token',
-    exp: now + 3600,
-    iat: now,
-  };
+// OAuth 2.0: Obter access token usando refresh token
+async function getAccessTokenFromRefresh(refreshToken: string): Promise<{ access_token: string; expires_in: number }> {
+  const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+  const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
 
-  // Encode header and claim
-  const encoder = new TextEncoder();
-  const headerB64 = btoa(JSON.stringify(header)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const claimB64 = btoa(JSON.stringify(claim)).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-  const signatureInput = `${headerB64}.${claimB64}`;
+  if (!clientId || !clientSecret) {
+    throw new Error('GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET devem estar configurados nas variáveis de ambiente');
+  }
 
-  // Import private key and sign
-  const cleanKey = privateKey.replace(/\\n/g, '\n');
-  const pemHeader = '-----BEGIN PRIVATE KEY-----';
-  const pemFooter = '-----END PRIVATE KEY-----';
-  const pemContents = cleanKey.substring(
-    cleanKey.indexOf(pemHeader) + pemHeader.length,
-    cleanKey.indexOf(pemFooter)
-  ).replace(/\s/g, '');
-  
-  const binaryKey = Uint8Array.from(atob(pemContents), c => c.charCodeAt(0));
-  
-  const cryptoKey = await crypto.subtle.importKey(
-    'pkcs8',
-    binaryKey,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-
-  const signature = await crypto.subtle.sign(
-    'RSASSA-PKCS1-v1_5',
-    cryptoKey,
-    encoder.encode(signatureInput)
-  );
-
-  const signatureB64 = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-
-  const jwt = `${signatureInput}.${signatureB64}`;
-
-  // Exchange JWT for access token
   const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    }),
   });
 
   const tokenData = await tokenResponse.json();
+  
   if (!tokenData.access_token) {
-    console.error('Token error:', tokenData);
-    throw new Error('Failed to get access token');
+    console.error('Token refresh error:', tokenData);
+    throw new Error(`Failed to refresh access token: ${tokenData.error || 'Unknown error'}`);
   }
   
+  return {
+    access_token: tokenData.access_token,
+    expires_in: tokenData.expires_in || 3600,
+  };
+}
+
+// OAuth 2.0: Obter access token (com cache e renovação automática)
+async function getAccessToken(credentials: SheetRequest['credentials']): Promise<string> {
+  if (!credentials?.refreshToken) {
+    throw new Error('Refresh token não encontrado. É necessário autorizar a aplicação via OAuth 2.0.');
+  }
+
+  // Se temos um access token válido, usar ele
+  if (credentials.accessToken && credentials.tokenExpiry) {
+    const now = Math.floor(Date.now() / 1000);
+    // Renovar se expirar em menos de 5 minutos
+    if (credentials.tokenExpiry > now + 300) {
+      return credentials.accessToken;
+    }
+  }
+
+  // Renovar o token
+  const tokenData = await getAccessTokenFromRefresh(credentials.refreshToken);
   return tokenData.access_token;
+}
+
+// OAuth 2.0: Trocar código de autorização por tokens
+async function exchangeCodeForTokens(code: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+  const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+  const redirectUri = Deno.env.get('GOOGLE_REDIRECT_URI') || 'http://localhost:8080/oauth/callback';
+
+  if (!clientId || !clientSecret) {
+    throw new Error('GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET devem estar configurados nas variáveis de ambiente');
+  }
+
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    }),
+  });
+
+  const tokenData = await tokenResponse.json();
+  
+  if (!tokenData.access_token || !tokenData.refresh_token) {
+    console.error('Token exchange error:', tokenData);
+    throw new Error(`Failed to exchange code for tokens: ${tokenData.error || 'Unknown error'}`);
+  }
+  
+  return {
+    access_token: tokenData.access_token,
+    refresh_token: tokenData.refresh_token,
+    expires_in: tokenData.expires_in || 3600,
+  };
 }
 
 async function sheetsRequest(
@@ -329,22 +356,51 @@ serve(async (req) => {
     const body: SheetRequest = await req.json();
     const { action, sheet, data, rowIndex, credentials } = body;
 
-    // Get credentials from request body or environment variables (fallback)
-    const email = credentials?.email || Deno.env.get('GOOGLE_SERVICE_ACCOUNT_EMAIL');
-    const sheetsId = credentials?.sheetsId || Deno.env.get('GOOGLE_SHEETS_ID');
-    const privateKey = credentials?.privateKey || Deno.env.get('GOOGLE_PRIVATE_KEY');
+    // Handle OAuth callback
+    if (action === 'oauth-callback') {
+      const { code } = body;
+      if (!code) {
+        return new Response(
+          JSON.stringify({ error: 'Código de autorização não fornecido', code: 'MISSING_CODE' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
 
-    if (!email || !sheetsId || !privateKey) {
-      console.error('Missing credentials');
+      try {
+        const tokens = await exchangeCodeForTokens(code);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_in: tokens.expires_in,
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+        return new Response(
+          JSON.stringify({ error: errorMessage, code: 'TOKEN_EXCHANGE_ERROR' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // Get credentials from request body
+    const sheetsId = credentials?.sheetsId;
+    
+    if (!sheetsId) {
+      console.error('Missing credentials: sheetsId');
       return new Response(
-        JSON.stringify({ error: 'Credenciais não configuradas. Configure na página de Configurações.', code: 'MISSING_CREDENTIALS' }),
+        JSON.stringify({ error: 'ID da Planilha é obrigatório. Configure na página de Configurações.', code: 'MISSING_CREDENTIALS' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     console.log(`Processing action: ${action} for sheet: ${sheet || 'N/A'}`);
 
-    const accessToken = await getAccessToken(email, privateKey);
+    // Obter access token via OAuth 2.0
+    const accessToken = await getAccessToken(credentials);
 
     let result: unknown;
 

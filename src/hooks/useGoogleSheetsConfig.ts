@@ -50,23 +50,12 @@ export function useGoogleSheetsConfig() {
   const isValid = useMemo(() => {
     if (!config) return false;
     
-    const email = config.serviceAccountEmail?.trim();
     const sheetsId = config.sheetsId?.trim();
-    const privateKey = config.privateKey?.trim();
-    
-    // Validate email format (basic check)
-    const emailValid = email && email.length > 0 && email.includes('@');
     
     // Validate sheets ID (should be alphanumeric, usually long)
     const sheetsIdValid = sheetsId && sheetsId.length > 10;
     
-    // Validate private key (should contain BEGIN and END markers)
-    const privateKeyValid = privateKey && 
-      privateKey.length > 100 && 
-      privateKey.includes('BEGIN PRIVATE KEY') && 
-      privateKey.includes('END PRIVATE KEY');
-    
-    return !!(emailValid && sheetsIdValid && privateKeyValid);
+    return !!sheetsIdValid;
   }, [config]);
 
   return {

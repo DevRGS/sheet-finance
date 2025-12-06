@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Loader2, CheckCircle2, XCircle, Database, RefreshCw, Cloud, AlertTriangle, Eye, EyeOff, Save } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Database, RefreshCw, Cloud, AlertTriangle, Save } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -7,58 +7,59 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { useGoogleSheetsConfig } from '@/hooks/useGoogleSheetsConfig';
+import { useGoogleAuth } from '@/hooks/useGoogleAuth';
 import { toast } from 'sonner';
 
 const Configuracoes = () => {
   const { isConnected, isInitializing, connectToSheets, loadData } = useFinanceContext();
   const { config, saveConfig, isValid, isLoading: configLoading } = useGoogleSheetsConfig();
+  const { isSignedIn, isLoading: authLoading, signIn, signOut, error: authError, authData } = useGoogleAuth();
   const [connectionResult, setConnectionResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [showPrivateKey, setShowPrivateKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
   const [formData, setFormData] = useState({
-    serviceAccountEmail: '',
     sheetsId: '',
-    privateKey: '',
   });
 
   // Load config into form when it's available
   useEffect(() => {
     if (config && !configLoading) {
       setFormData({
-        serviceAccountEmail: config.serviceAccountEmail || '',
         sheetsId: config.sheetsId || '',
-        privateKey: config.privateKey || '',
       });
     }
   }, [config, configLoading]);
+
+  const handleSignIn = async () => {
+    try {
+      const authData = await signIn();
+      toast.success(`Conectado com Google com sucesso! (${authData.email})`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao conectar com Google';
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      toast.success('Desconectado com sucesso!');
+    } catch (error) {
+      toast.error('Erro ao desconectar');
+    }
+  };
 
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
   const handleSaveCredentials = async () => {
-    const trimmedEmail = formData.serviceAccountEmail.trim();
     const trimmedSheetsId = formData.sheetsId.trim();
-    const trimmedPrivateKey = formData.privateKey.trim();
 
-    if (!trimmedEmail || !trimmedSheetsId || !trimmedPrivateKey) {
-      toast.error('Preencha todos os campos obrigatórios');
-      return;
-    }
-
-    // Validate private key format
-    if (!trimmedPrivateKey.includes('BEGIN PRIVATE KEY') || !trimmedPrivateKey.includes('END PRIVATE KEY')) {
-      toast.error('A chave privada parece estar incompleta. Certifique-se de copiar a chave completa do arquivo JSON (incluindo BEGIN e END).');
-      return;
-    }
-
-    // Validate email format
-    if (!trimmedEmail.includes('@') || !trimmedEmail.includes('.')) {
-      toast.error('O email da Service Account parece estar inválido.');
+    if (!trimmedSheetsId) {
+      toast.error('Preencha o ID da Planilha');
       return;
     }
 
@@ -70,15 +71,15 @@ const Configuracoes = () => {
 
     setIsSaving(true);
     try {
+      const currentConfig = config || { isConnected: false };
       const saved = saveConfig({
-        serviceAccountEmail: trimmedEmail,
+        ...currentConfig,
         sheetsId: trimmedSheetsId,
-        privateKey: trimmedPrivateKey,
         isConnected: false,
       });
 
       if (saved) {
-        toast.success('Credenciais salvas com sucesso!');
+        toast.success('ID da Planilha salvo com sucesso!');
         // Force a small delay to ensure state updates
         setTimeout(() => {
           console.log('Config saved, isValid should update');
@@ -103,7 +104,9 @@ const Configuracoes = () => {
     }
 
     setConnectionResult(null);
-    const result = await connectToSheets();
+    // Reset auto-connect attempts when manually connecting
+    localStorage.removeItem('auto_connect_attempts');
+    const result = await connectToSheets(true);
     setConnectionResult(result);
     
     if (result.success) {
@@ -166,7 +169,7 @@ const Configuracoes = () => {
                 )}
                 <Button 
                   onClick={handleConnect} 
-                  disabled={isInitializing || !isValid} 
+                  disabled={isInitializing || !isValid || !isSignedIn} 
                   className="gap-2"
                 >
                   {isInitializing ? (
@@ -206,27 +209,11 @@ const Configuracoes = () => {
               Credenciais do Google Sheets
             </CardTitle>
             <CardDescription>
-              Configure suas credenciais do Google Cloud para conectar com o Google Sheets.
+              Configure o ID da planilha e conecte sua conta Google para sincronizar dados.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="serviceAccountEmail">
-                  Email da Service Account <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="serviceAccountEmail"
-                  type="email"
-                  placeholder="exemplo@projeto.iam.gserviceaccount.com"
-                  value={formData.serviceAccountEmail}
-                  onChange={(e) => handleInputChange('serviceAccountEmail', e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  Copie o valor do campo <code className="px-1 py-0.5 bg-muted rounded">client_email</code> do arquivo JSON
-                </p>
-              </div>
-
               <div className="space-y-2">
                 <Label htmlFor="sheetsId">
                   ID da Planilha <span className="text-destructive">*</span>
@@ -243,41 +230,6 @@ const Configuracoes = () => {
                 </p>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="privateKey">
-                  Chave Privada (Private Key) <span className="text-destructive">*</span>
-                </Label>
-                <div className="relative">
-                  <Textarea
-                    id="privateKey"
-                    rows={8}
-                    placeholder="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
-                    value={formData.privateKey}
-                    onChange={(e) => handleInputChange('privateKey', e.target.value)}
-                    className="font-mono text-xs pr-10"
-                  />
-                  {formData.privateKey && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-2 top-2 h-8 w-8 p-0"
-                      onClick={() => setShowPrivateKey(!showPrivateKey)}
-                      title={showPrivateKey ? 'Ocultar chave' : 'Mostrar chave'}
-                    >
-                      {showPrivateKey ? (
-                        <EyeOff className="h-4 w-4" />
-                      ) : (
-                        <Eye className="h-4 w-4" />
-                      )}
-                    </Button>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Copie o valor completo do campo <code className="px-1 py-0.5 bg-muted rounded">private_key</code> do arquivo JSON (incluindo BEGIN e END)
-                </p>
-              </div>
-
               <Button
                 onClick={handleSaveCredentials}
                 disabled={isSaving}
@@ -288,8 +240,74 @@ const Configuracoes = () => {
                 ) : (
                   <Save className="h-4 w-4" />
                 )}
-                Salvar Credenciais
+                Salvar ID da Planilha
               </Button>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-background px-2 text-muted-foreground">Autorização OAuth 2.0</span>
+                </div>
+              </div>
+
+              {isSignedIn && authData ? (
+                <Alert>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  <AlertTitle>Conectado</AlertTitle>
+                  <AlertDescription>
+                    Conectado como: <strong>{authData.email}</strong>. Você pode desconectar se necessário.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <Alert>
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Autorização Necessária</AlertTitle>
+                  <AlertDescription>
+                    Você precisa conectar sua conta Google para usar o Google Sheets.
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {authError && (
+                <Alert variant="destructive">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Erro</AlertTitle>
+                  <AlertDescription>{authError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex gap-2">
+                {isSignedIn ? (
+                  <Button
+                    onClick={handleSignOut}
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    disabled={authLoading}
+                  >
+                    {authLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <XCircle className="h-4 w-4" />
+                    )}
+                    Desconectar
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={handleSignIn}
+                    className="flex-1 gap-2"
+                    disabled={authLoading}
+                  >
+                    {authLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Cloud className="h-4 w-4" />
+                    )}
+                    Conectar com Google
+                  </Button>
+                )}
+              </div>
             </div>
 
             {/* Status das credenciais */}
@@ -310,27 +328,30 @@ const Configuracoes = () => {
               </div>
               {config && (
                 <div className="text-xs text-muted-foreground space-y-1">
-                  <p>Email: {config.serviceAccountEmail ? '✓ Preenchido' : '✗ Não preenchido'}</p>
                   <p>ID Planilha: {config.sheetsId ? '✓ Preenchido' : '✗ Não preenchido'}</p>
-                  <p>Chave Privada: {config.privateKey ? '✓ Preenchida' : '✗ Não preenchida'}</p>
+                  <p>Google Auth: {isSignedIn ? '✓ Conectado' : '✗ Não conectado'}</p>
                 </div>
               )}
             </div>
 
-            {isValid ? (
+            {isValid && isSignedIn ? (
               <Alert>
                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <AlertTitle>Credenciais Configuradas</AlertTitle>
+                <AlertTitle>Pronto para Conectar</AlertTitle>
                 <AlertDescription>
-                  Suas credenciais estão salvas e válidas. Clique em "Conectar" para estabelecer a conexão.
+                  Suas credenciais estão salvas e você está autenticado. Clique em "Conectar" para estabelecer a conexão com o Google Sheets.
                 </AlertDescription>
               </Alert>
             ) : (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Credenciais Não Configuradas</AlertTitle>
+                <AlertTitle>Configuração Incompleta</AlertTitle>
                 <AlertDescription>
-                  Preencha todos os campos e clique em "Salvar Credenciais" antes de conectar.
+                  {!isValid && !isSignedIn 
+                    ? 'Preencha o ID da Planilha e faça login com Google antes de conectar.'
+                    : !isValid 
+                    ? 'Preencha o ID da Planilha e clique em "Salvar ID da Planilha" antes de conectar.'
+                    : 'Faça login com Google antes de conectar.'}
                 </AlertDescription>
               </Alert>
             )}
@@ -340,8 +361,9 @@ const Configuracoes = () => {
               <AlertTitle>Importante</AlertTitle>
               <AlertDescription>
                 <p>
-                  Certifique-se de que a planilha foi compartilhada com o email da Service Account
-                  com permissão de <strong>Editor</strong>.
+                  Certifique-se de que a planilha foi compartilhada com a conta Google que você conectou
+                  com permissão de <strong>Editor</strong>. Configure a variável de ambiente VITE_GOOGLE_CLIENT_ID
+                  com o Client ID do seu projeto Google Cloud.
                 </p>
               </AlertDescription>
             </Alert>
@@ -393,12 +415,16 @@ const Configuracoes = () => {
               <p>No painel de APIs, busque e habilite "Google Sheets API".</p>
             </div>
             <div className="space-y-2">
-              <p className="font-medium text-foreground">3. Criar conta de serviço</p>
-              <p>Em "Credenciais", crie uma nova conta de serviço e baixe o arquivo JSON.</p>
+              <p className="font-medium text-foreground">3. Criar credenciais OAuth 2.0</p>
+              <p>Em "Credenciais", crie credenciais OAuth 2.0 (tipo "Aplicativo da Web"). Não é necessário configurar URI de redirecionamento para client-side.</p>
             </div>
             <div className="space-y-2">
-              <p className="font-medium text-foreground">4. Compartilhar planilha</p>
-              <p>Compartilhe sua planilha do Google Sheets com o email da conta de serviço (como Editor).</p>
+              <p className="font-medium text-foreground">4. Configurar Client ID</p>
+              <p>Configure a variável de ambiente VITE_GOOGLE_CLIENT_ID com o Client ID do seu projeto Google Cloud.</p>
+            </div>
+            <div className="space-y-2">
+              <p className="font-medium text-foreground">5. Compartilhar planilha</p>
+              <p>Compartilhe sua planilha do Google Sheets com a conta Google que você conectou (como Editor).</p>
             </div>
           </CardContent>
         </Card>

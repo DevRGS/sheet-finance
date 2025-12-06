@@ -15,6 +15,9 @@ const defaultCategories: Category[] = [
   { id: '8', nome: 'Outros', cor: '#6b7280' },
 ];
 
+const MAX_AUTO_CONNECT_ATTEMPTS = 3;
+const AUTO_CONNECT_ATTEMPTS_KEY = 'auto_connect_attempts';
+
 export function useFinance() {
   const { config, isValid } = useGoogleSheetsConfig();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -79,11 +82,11 @@ export function useFinance() {
     }
   }, [isConnected, loadData]);
 
-  const connectToSheets = useCallback(async () => {
+  const connectToSheets = useCallback(async (isManual = false) => {
     if (!config || !isValid) {
       return {
         success: false,
-        message: 'Configure as credenciais antes de conectar',
+        message: 'Configure o ID da Planilha antes de conectar',
       };
     }
 
@@ -94,34 +97,73 @@ export function useFinance() {
         throw new Error(testResult.message);
       }
 
-      const initResult = await sheetsService.initializeSpreadsheetPublic(config);
+      const initResult = await sheetsService.initializeSpreadsheet(config);
       if (!initResult.success) {
         throw new Error(initResult.message);
       }
 
       setIsConnected(true);
+      // Reset attempts on successful connection (always reset, regardless of manual or auto)
+      localStorage.removeItem(AUTO_CONNECT_ATTEMPTS_KEY);
       return { success: true, message: 'Conexão estabelecida com sucesso!' };
     } catch (error) {
       console.error('Connection error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Erro ao conectar';
+      
+      // If error is about authentication, provide helpful message
+      if (errorMessage.includes('Não autenticado') || errorMessage.includes('login')) {
+        return {
+          success: false,
+          message: 'Você precisa fazer login com Google primeiro. Clique em "Conectar com Google" na página de Configurações.',
+        };
+      }
+      
+      // Check for 403 Forbidden error
+      if (errorMessage.includes('403') || errorMessage.includes('Forbidden') || errorMessage.includes('Permission denied')) {
+        return {
+          success: false,
+          message: 'Acesso negado (403). Verifique se: 1) A planilha foi compartilhada com o email que você usou para fazer login, 2) O email tem permissão de Editor, 3) O ID da planilha está correto.',
+        };
+      }
+      
       return { 
         success: false, 
-        message: error instanceof Error ? error.message : 'Erro ao conectar' 
+        message: errorMessage,
       };
     } finally {
       setIsInitializing(false);
     }
   }, [config, isValid]);
 
-  // Auto-connect when credentials are valid and not yet connected
+  // Auto-connect when credentials are valid and not yet connected (max 3 attempts)
   useEffect(() => {
     if (config && isValid && !isConnected && !isInitializing) {
+      // Check if we've exceeded max attempts
+      const attempts = parseInt(localStorage.getItem(AUTO_CONNECT_ATTEMPTS_KEY) || '0', 10);
+      if (attempts >= MAX_AUTO_CONNECT_ATTEMPTS) {
+        console.log(`Auto-connect disabled after ${MAX_AUTO_CONNECT_ATTEMPTS} failed attempts. Please connect manually.`);
+        return;
+      }
+
       // Small delay to ensure everything is initialized
       const timer = setTimeout(() => {
-        connectToSheets().catch((error) => {
+        connectToSheets(false).then((result) => {
+          if (!result.success) {
+            // Increment attempts on failure
+            const newAttempts = attempts + 1;
+            localStorage.setItem(AUTO_CONNECT_ATTEMPTS_KEY, newAttempts.toString());
+            console.log(`Auto-connect attempt ${newAttempts}/${MAX_AUTO_CONNECT_ATTEMPTS} failed:`, result.message);
+            
+            if (newAttempts >= MAX_AUTO_CONNECT_ATTEMPTS) {
+              console.log('Auto-connect disabled. Please connect manually from the Configurações page.');
+            }
+          }
+        }).catch((error) => {
           console.error('Auto-connect failed:', error);
-          // Silently fail - user can manually connect if needed
+          const newAttempts = attempts + 1;
+          localStorage.setItem(AUTO_CONNECT_ATTEMPTS_KEY, newAttempts.toString());
         });
-      }, 100);
+      }, 1000); // Increased delay to avoid rapid retries
       
       return () => clearTimeout(timer);
     }

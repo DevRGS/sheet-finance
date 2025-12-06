@@ -29,9 +29,7 @@ export interface Goal {
 }
 
 export interface GoogleSheetsConfig {
-  serviceAccountEmail: string;
   sheetsId: string;
-  privateKey: string;
   isConnected: boolean;
 }
 
