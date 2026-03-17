@@ -1,4 +1,14 @@
-import { Transaction, Category, MonthlyData, CategoryData, BalanceData, GoalTransaction, ForecastTransaction, Bill } from '@/types/finance';
+import {
+  Transaction,
+  Category,
+  MonthlyData,
+  CategoryData,
+  BalanceData,
+  GoalTransaction,
+  ForecastTransaction,
+  Bill,
+  RecurringTransaction,
+} from '@/types/finance';
 
 export const defaultCategories: Category[] = [
   { id: '1', nome: 'Alimentação', cor: '#a78bfa' },
@@ -11,38 +21,200 @@ export const defaultCategories: Category[] = [
   { id: '8', nome: 'Outros', cor: '#6b7280' },
 ];
 
-export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []): MonthlyData[] => {
-  const monthlyMap = new Map<string, { receitas: number; despesas: number }>();
+// ─── Recurring transaction helpers ───────────────────────────────────────────
 
-  transactions.forEach((t) => {
-    const month = t.data.substring(0, 7);
-    const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
+const RECURRENCE_MONTHS: Record<string, number> = {
+  mensal: 1,
+  bimestral: 2,
+  trimestral: 3,
+  semestral: 6,
+  anual: 12,
+};
 
-    if (t.tipo === 'Receita') {
-      current.receitas += t.valor;
-    } else {
-      current.despesas += t.valor;
+/** Advance a (year, month) pair by `n` months. */
+function addMonthsTo(year: number, month: number, n: number): { year: number; month: number } {
+  month += n;
+  year += Math.floor((month - 1) / 12);
+  month = ((month - 1) % 12) + 1;
+  return { year, month };
+}
+
+/** Returns true if the recurring transaction has a scheduled occurrence in yearMonth (YYYY-MM). */
+export function recurringOccursInMonth(rt: RecurringTransaction, yearMonth: string): boolean {
+  if (!rt.ativo) return false;
+
+  const [ty, tm] = yearMonth.split('-').map(Number);
+  const [sy, sm] = rt.data_inicio.substring(0, 7).split('-').map(Number);
+
+  // Not started yet
+  if (ty < sy || (ty === sy && tm < sm)) return false;
+
+  const diff = (ty - sy) * 12 + (tm - sm);
+  const interval = RECURRENCE_MONTHS[rt.recorrencia];
+  if (!interval || diff % interval !== 0) return false;
+
+  // Ended after N months
+  if (rt.fim_tipo === 'after_months' && rt.meses_duracao != null && diff >= rt.meses_duracao) return false;
+
+  return true;
+}
+
+/**
+ * Iterates over every occurrence of a recurring transaction from data_inicio
+ * up to (and including) maxYearMonth, calling `callback` for each.
+ */
+function forEachOccurrence(
+  rt: RecurringTransaction,
+  maxYearMonth: string,
+  callback: (yearMonth: string, occurrenceIndex: number) => void
+) {
+  if (!rt.ativo) return;
+
+  const [sy, sm] = rt.data_inicio.substring(0, 7).split('-').map(Number);
+  const interval = RECURRENCE_MONTHS[rt.recorrencia] || 1;
+
+  let { year: y, month: m } = { year: sy, month: sm };
+  let idx = 0;
+  const SAFETY = 1200; // max 100 years of monthly recurrence
+
+  while (idx < SAFETY) {
+    const monthKey = `${y}-${String(m).padStart(2, '0')}`;
+    if (monthKey > maxYearMonth) break;
+
+    if (rt.fim_tipo === 'after_months' && rt.meses_duracao != null && idx >= rt.meses_duracao) break;
+
+    callback(monthKey, idx);
+
+    ({ year: y, month: m } = addMonthsTo(y, m, interval));
+    idx++;
+  }
+}
+
+/** Today as YYYY-MM. */
+function todayYearMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Iterates over every occurrence of a recurring transaction whose calculated
+ * date falls within [start, end] (YYYY-MM-DD), calling `callback` for each.
+ */
+function forEachOccurrenceInDateRange(
+  rt: RecurringTransaction,
+  start: string,
+  end: string,
+  callback: (occurrenceDate: string, occurrenceIndex: number) => void
+) {
+  if (!rt.ativo) return;
+
+  const startMonth = start.substring(0, 7);
+  const endMonth = end.substring(0, 7);
+
+  const [sy, sm] = rt.data_inicio.substring(0, 7).split('-').map(Number);
+  const rtDay = parseInt(rt.data_inicio.split('-')[2], 10);
+  const interval = RECURRENCE_MONTHS[rt.recorrencia] || 1;
+
+  let { year: y, month: m } = { year: sy, month: sm };
+  let idx = 0;
+  const SAFETY = 1200;
+
+  while (idx < SAFETY) {
+    const monthKey = `${y}-${String(m).padStart(2, '0')}`;
+    if (monthKey > endMonth) break;
+    if (rt.fim_tipo === 'after_months' && rt.meses_duracao != null && idx >= rt.meses_duracao) break;
+
+    if (monthKey >= startMonth) {
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const actualDay = Math.min(rtDay, daysInMonth);
+      const occDate = `${y}-${String(m).padStart(2, '0')}-${String(actualDay).padStart(2, '0')}`;
+      if (occDate >= start && occDate <= end) {
+        callback(occDate, idx);
+      }
     }
 
+    ({ year: y, month: m } = addMonthsTo(y, m, interval));
+    idx++;
+  }
+}
+
+/**
+ * Returns all occurrence dates (YYYY-MM-DD) for a recurring transaction
+ * from its start date up to (and including) `upToDate`.
+ */
+export function getRecurringOccurrences(
+  rt: RecurringTransaction,
+  upToDate: string // YYYY-MM-DD
+): string[] {
+  const dates: string[] = [];
+  forEachOccurrenceInDateRange(rt, rt.data_inicio, upToDate, (occDate) => {
+    dates.push(occDate);
+  });
+  return dates;
+}
+
+/** Sum recurring transaction values whose occurrence falls within [start, end]. */
+export function getRecurringTotalsInRange(
+  recurringTransactions: RecurringTransaction[],
+  start: string,
+  end: string
+): { receitas: number; despesas: number } {
+  let receitas = 0;
+  let despesas = 0;
+  recurringTransactions.forEach((rt) => {
+    forEachOccurrenceInDateRange(rt, start, end, () => {
+      if (rt.tipo === 'Receita') receitas += rt.valor;
+      else despesas += rt.valor;
+    });
+  });
+  return { receitas, despesas };
+}
+
+// ─── getMonthlyData ───────────────────────────────────────────────────────────
+
+export const getMonthlyData = (
+  transactions: Transaction[],
+  bills: Bill[] = [],
+  recurringTransactions: RecurringTransaction[] = [],
+  dateRange?: { start: string; end: string }
+): MonthlyData[] => {
+  const monthlyMap = new Map<string, { receitas: number; despesas: number }>();
+
+  const txList = dateRange
+    ? transactions.filter((t) => t.data >= dateRange.start && t.data <= dateRange.end)
+    : transactions;
+
+  txList.forEach((t) => {
+    const month = t.data.substring(0, 7);
+    const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
+    if (t.tipo === 'Receita') current.receitas += t.valor;
+    else current.despesas += t.valor;
     monthlyMap.set(month, current);
   });
 
-  // Processar contas
-  bills.forEach((bill) => {
+  const billList = dateRange
+    ? bills.filter((bill) => {
+        const d =
+          bill.pago && bill.data_pagamento
+            ? bill.data_pagamento
+            : bill.data_vencimento || new Date().toISOString().substring(0, 10);
+        return d >= dateRange.start && d <= dateRange.end;
+      })
+    : bills;
+
+  billList.forEach((bill) => {
     if (bill.tipo === 'pagar') {
-      // Contas a pagar: usar data_vencimento se não paga, ou data_pagamento se paga
-      const dateToUse = bill.pago && bill.data_pagamento 
-        ? bill.data_pagamento 
-        : (bill.data_vencimento || new Date().toISOString().substring(0, 10));
-      
-      const month = dateToUse.substring(0, 7); // YYYY-MM
+      const dateToUse =
+        bill.pago && bill.data_pagamento
+          ? bill.data_pagamento
+          : bill.data_vencimento || new Date().toISOString().substring(0, 10);
+      const month = dateToUse.substring(0, 7);
       const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
       current.despesas += bill.valor;
       monthlyMap.set(month, current);
     } else if (bill.tipo === 'receber') {
-      // Contas a receber: só contar como receita se foi recebida
       if (bill.pago && bill.data_pagamento) {
-        const month = bill.data_pagamento.substring(0, 7); // YYYY-MM
+        const month = bill.data_pagamento.substring(0, 7);
         const current = monthlyMap.get(month) || { receitas: 0, despesas: 0 };
         current.receitas += bill.valor;
         monthlyMap.set(month, current);
@@ -50,9 +222,32 @@ export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []):
     }
   });
 
+  if (dateRange) {
+    recurringTransactions.forEach((rt) => {
+      forEachOccurrenceInDateRange(rt, dateRange.start, dateRange.end, (occDate) => {
+        const monthKey = occDate.substring(0, 7);
+        const current = monthlyMap.get(monthKey) || { receitas: 0, despesas: 0 };
+        if (rt.tipo === 'Receita') current.receitas += rt.valor;
+        else current.despesas += rt.valor;
+        monthlyMap.set(monthKey, current);
+      });
+    });
+  } else {
+    const maxMonth = todayYearMonth();
+    recurringTransactions.forEach((rt) => {
+      forEachOccurrence(rt, maxMonth, (monthKey) => {
+        const current = monthlyMap.get(monthKey) || { receitas: 0, despesas: 0 };
+        if (rt.tipo === 'Receita') current.receitas += rt.valor;
+        else current.despesas += rt.valor;
+        monthlyMap.set(monthKey, current);
+      });
+    });
+  }
+
+  // Sort by YYYY-MM key for correct chronological order
   return Array.from(monthlyMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, data]) => {
-      // Parsear manualmente para evitar problemas de timezone
       const [year, monthNum] = month.split('-').map(Number);
       const date = new Date(year, monthNum - 1, 1);
       return {
@@ -61,27 +256,64 @@ export const getMonthlyData = (transactions: Transaction[], bills: Bill[] = []):
         despesas: data.despesas,
         saldo: data.receitas - data.despesas,
       };
-    })
-    .sort((a, b) => a.month.localeCompare(b.month));
+    });
 };
 
-export const getCategoryData = (transactions: Transaction[], categories: Category[], bills: Bill[] = []): CategoryData[] => {
+// ─── getCategoryData ──────────────────────────────────────────────────────────
+
+export const getCategoryData = (
+  transactions: Transaction[],
+  categories: Category[],
+  bills: Bill[] = [],
+  recurringTransactions: RecurringTransaction[] = [],
+  dateRange?: { start: string; end: string }
+): CategoryData[] => {
   const categoryMap = new Map<string, number>();
 
-  transactions
+  const txList = dateRange
+    ? transactions.filter((t) => t.data >= dateRange.start && t.data <= dateRange.end)
+    : transactions;
+
+  txList
     .filter((t) => t.tipo === 'Despesa')
     .forEach((t) => {
-      const current = categoryMap.get(t.categoria) || 0;
-      categoryMap.set(t.categoria, current + t.valor);
+      categoryMap.set(t.categoria, (categoryMap.get(t.categoria) || 0) + t.valor);
     });
 
-  // Processar contas a pagar (pagas ou não pagas)
-  bills
+  const billList = dateRange
+    ? bills.filter((bill) => {
+        const d =
+          bill.pago && bill.data_pagamento
+            ? bill.data_pagamento
+            : bill.data_vencimento || new Date().toISOString().substring(0, 10);
+        return d >= dateRange.start && d <= dateRange.end;
+      })
+    : bills;
+
+  billList
     .filter((bill) => bill.tipo === 'pagar')
     .forEach((bill) => {
-      const current = categoryMap.get(bill.categoria) || 0;
-      categoryMap.set(bill.categoria, current + bill.valor);
+      categoryMap.set(bill.categoria, (categoryMap.get(bill.categoria) || 0) + bill.valor);
     });
+
+  if (dateRange) {
+    recurringTransactions
+      .filter((rt) => rt.tipo === 'Despesa')
+      .forEach((rt) => {
+        forEachOccurrenceInDateRange(rt, dateRange.start, dateRange.end, () => {
+          categoryMap.set(rt.categoria, (categoryMap.get(rt.categoria) || 0) + rt.valor);
+        });
+      });
+  } else {
+    const maxMonth = todayYearMonth();
+    recurringTransactions
+      .filter((rt) => rt.tipo === 'Despesa')
+      .forEach((rt) => {
+        forEachOccurrence(rt, maxMonth, () => {
+          categoryMap.set(rt.categoria, (categoryMap.get(rt.categoria) || 0) + rt.valor);
+        });
+      });
+  }
 
   return Array.from(categoryMap.entries()).map(([categoria, valor]) => ({
     categoria,
@@ -89,6 +321,8 @@ export const getCategoryData = (transactions: Transaction[], categories: Categor
     cor: categories.find((c) => c.nome === categoria)?.cor || '#6b7280',
   }));
 };
+
+// ─── getBalanceData ───────────────────────────────────────────────────────────
 
 export const getBalanceData = (
   transactions: Transaction[],
@@ -103,9 +337,7 @@ export const getBalanceData = (
   const isFutureYear = selectedYear > currentYear;
   const isCurrentYear = selectedYear === currentYear;
 
-  // Helper function to parse date string safely (avoid timezone issues)
   const parseDateString = (dateString: string): { year: number; month: number; day: number } => {
-    // Date string is in format "YYYY-MM-DD"
     const parts = dateString.split('-');
     return {
       year: parseInt(parts[0], 10),
@@ -114,42 +346,38 @@ export const getBalanceData = (
     };
   };
 
-  // Helper function to create date object without timezone issues
   const createDateFromString = (dateString: string): Date => {
     const { year, month, day } = parseDateString(dateString);
-    // Use local time to avoid timezone conversion issues
     return new Date(year, month - 1, day);
   };
 
-  // Filter transactions by year - use string parsing to avoid timezone issues
   const filteredTransactions = transactions.filter((t) => {
     const { year } = parseDateString(t.data);
     return year === selectedYear;
   });
 
-  // Filter goal transactions by year
   const filteredGoalTransactions = goalTransactions.filter((gt) => {
     const { year } = parseDateString(gt.data);
     return year === selectedYear && gt.tipo === 'deposito';
   });
 
-  // Filter forecast transactions by year
   const filteredForecastTransactions: ForecastTransaction[] = [];
   if (forecastTransactions && (isFutureYear || isCurrentYear)) {
-    filteredForecastTransactions.push(...forecastTransactions.filter((ft) => {
-      const { year } = parseDateString(ft.data);
-      if (year === selectedYear) {
-        if (isCurrentYear) {
-          const forecastDate = createDateFromString(ft.data);
-          return forecastDate >= today;
+    filteredForecastTransactions.push(
+      ...forecastTransactions.filter((ft) => {
+        const { year } = parseDateString(ft.data);
+        if (year === selectedYear) {
+          if (isCurrentYear) {
+            const forecastDate = createDateFromString(ft.data);
+            return forecastDate >= today;
+          }
+          return true;
         }
-        return true;
-      }
-      return false;
-    }));
+        return false;
+      })
+    );
   }
 
-  // Calculate initial accumulated balance from previous year
   let initialAccumulated = 0;
   if (selectedYear > 1) {
     const previousYear = selectedYear - 1;
@@ -157,40 +385,38 @@ export const getBalanceData = (
       const { year } = parseDateString(t.data);
       return year === previousYear;
     });
-    
+
     let prevAccumulated = 0;
     for (let month = 1; month <= 12; month++) {
       const monthKey = `${previousYear}-${String(month).padStart(2, '0')}`;
       let monthEntradas = 0;
       let monthSaidas = 0;
-      
+
       prevYearTransactions.forEach((t) => {
         const tMonthKey = t.data.substring(0, 7);
         if (tMonthKey === monthKey) {
-          if (t.tipo === 'Receita') {
-            monthEntradas += t.valor;
-          } else {
-            monthSaidas += t.valor;
-          }
+          if (t.tipo === 'Receita') monthEntradas += t.valor;
+          else monthSaidas += t.valor;
         }
       });
-      
-      prevAccumulated += (monthEntradas - monthSaidas);
+
+      prevAccumulated += monthEntradas - monthSaidas;
     }
-    
+
     initialAccumulated = prevAccumulated;
   }
 
-  // Initialize monthly data map - ONLY for selected year
-  const monthlyMap = new Map<string, {
-    entradas: number;
-    saidas: number;
-    investimentos: number;
-    investimentos_metas: number;
-    receita_prevista: number;
-  }>();
+  const monthlyMap = new Map<
+    string,
+    {
+      entradas: number;
+      saidas: number;
+      investimentos: number;
+      investimentos_metas: number;
+      receita_prevista: number;
+    }
+  >();
 
-  // Initialize all 12 months for selected year ONLY
   for (let month = 1; month <= 12; month++) {
     const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`;
     monthlyMap.set(monthKey, {
@@ -202,13 +428,9 @@ export const getBalanceData = (
     });
   }
 
-  // Process regular transactions - ONLY for selected year
   filteredTransactions.forEach((t) => {
-    const monthKey = t.data.substring(0, 7); // YYYY-MM
-    // STRICT: Only process if monthKey starts with selectedYear
-    if (!monthKey.startsWith(`${selectedYear}-`)) {
-      return;
-    }
+    const monthKey = t.data.substring(0, 7);
+    if (!monthKey.startsWith(`${selectedYear}-`)) return;
     const current = monthlyMap.get(monthKey);
     if (!current) return;
 
@@ -216,31 +438,23 @@ export const getBalanceData = (
       current.entradas += t.valor;
     } else {
       current.saidas += t.valor;
-      if (t.categoria === 'Investimentos') {
-        current.investimentos += t.valor;
-      }
+      if (t.categoria === 'Investimentos') current.investimentos += t.valor;
     }
     monthlyMap.set(monthKey, current);
   });
 
-  // Process goal transactions - ONLY for selected year
   filteredGoalTransactions.forEach((gt) => {
     const monthKey = gt.data.substring(0, 7);
-    if (!monthKey.startsWith(`${selectedYear}-`)) {
-      return;
-    }
+    if (!monthKey.startsWith(`${selectedYear}-`)) return;
     const current = monthlyMap.get(monthKey);
     if (!current) return;
     current.investimentos_metas += gt.valor;
     monthlyMap.set(monthKey, current);
   });
 
-  // Process forecast transactions - ONLY for selected year
   filteredForecastTransactions.forEach((ft) => {
     const monthKey = ft.data.substring(0, 7);
-    if (!monthKey.startsWith(`${selectedYear}-`)) {
-      return;
-    }
+    if (!monthKey.startsWith(`${selectedYear}-`)) return;
     const current = monthlyMap.get(monthKey);
     if (!current) return;
 
@@ -248,65 +462,49 @@ export const getBalanceData = (
       current.entradas += ft.valor;
     } else {
       current.saidas += ft.valor;
-      if (ft.categoria === 'Investimentos') {
-        current.investimentos += ft.valor;
-      }
+      if (ft.categoria === 'Investimentos') current.investimentos += ft.valor;
     }
     monthlyMap.set(monthKey, current);
   });
 
-  // Processar contas - ONLY for selected year
   bills.forEach((bill) => {
     if (bill.tipo === 'pagar') {
-      // Contas a pagar: usar data_vencimento se não paga, ou data_pagamento se paga
-      const dateToUse = bill.pago && bill.data_pagamento 
-        ? bill.data_pagamento 
-        : (bill.data_vencimento || new Date().toISOString().substring(0, 10));
-      
+      const dateToUse =
+        bill.pago && bill.data_pagamento
+          ? bill.data_pagamento
+          : bill.data_vencimento || new Date().toISOString().substring(0, 10);
+
       const { year: billYear } = parseDateString(dateToUse);
-      if (billYear !== selectedYear) {
-        return;
-      }
-      
-      const monthKey = dateToUse.substring(0, 7); // YYYY-MM
-      if (!monthKey.startsWith(`${selectedYear}-`)) {
-        return;
-      }
-      
+      if (billYear !== selectedYear) return;
+
+      const monthKey = dateToUse.substring(0, 7);
+      if (!monthKey.startsWith(`${selectedYear}-`)) return;
+
       const current = monthlyMap.get(monthKey);
       if (!current) return;
       current.saidas += bill.valor;
       monthlyMap.set(monthKey, current);
     } else if (bill.tipo === 'receber') {
       if (bill.pago && bill.data_pagamento) {
-        // Conta recebida: usar data_pagamento
         const { year: billYear } = parseDateString(bill.data_pagamento);
-        if (billYear !== selectedYear) {
-          return;
-        }
-        
-        const monthKey = bill.data_pagamento.substring(0, 7); // YYYY-MM
-        if (!monthKey.startsWith(`${selectedYear}-`)) {
-          return;
-        }
-        
+        if (billYear !== selectedYear) return;
+
+        const monthKey = bill.data_pagamento.substring(0, 7);
+        if (!monthKey.startsWith(`${selectedYear}-`)) return;
+
         const current = monthlyMap.get(monthKey);
         if (!current) return;
         current.entradas += bill.valor;
         monthlyMap.set(monthKey, current);
       } else {
-        // Conta não recebida: adicionar como receita prevista usando data_vencimento ou data atual
-        const dateToUse = bill.data_vencimento || new Date().toISOString().substring(0, 10);
+        const dateToUse =
+          bill.data_vencimento || new Date().toISOString().substring(0, 10);
         const { year: billYear } = parseDateString(dateToUse);
-        if (billYear !== selectedYear) {
-          return;
-        }
-        
-        const monthKey = dateToUse.substring(0, 7); // YYYY-MM
-        if (!monthKey.startsWith(`${selectedYear}-`)) {
-          return;
-        }
-        
+        if (billYear !== selectedYear) return;
+
+        const monthKey = dateToUse.substring(0, 7);
+        if (!monthKey.startsWith(`${selectedYear}-`)) return;
+
         const current = monthlyMap.get(monthKey);
         if (!current) return;
         current.receita_prevista += bill.valor;
@@ -315,33 +513,25 @@ export const getBalanceData = (
     }
   });
 
-  // Build final array with EXACTLY 12 months for selected year, in order
   const finalBalanceData: BalanceData[] = [];
   let accumulated = initialAccumulated;
-  
+
   for (let month = 1; month <= 12; month++) {
     const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`;
-    
-    // STRICT: Verify monthKey belongs to selected year
     const monthKeyYear = parseInt(monthKey.substring(0, 4));
-    if (monthKeyYear !== selectedYear) {
-      console.error(`[getBalanceData] Invalid monthKey: ${monthKey} for year ${selectedYear}`);
-      continue;
-    }
-    
+    if (monthKeyYear !== selectedYear) continue;
+
     const monthData = monthlyMap.get(monthKey);
-    
-    // Create month label using local date to avoid timezone issues
     const monthDate = new Date(selectedYear, month - 1, 1);
     const monthLabel = monthDate.toLocaleDateString('pt-BR', {
       month: 'short',
       year: '2-digit',
     });
-    
+
     if (monthData) {
       const saldo = monthData.entradas - monthData.saidas;
       accumulated += saldo;
-      
+
       finalBalanceData.push({
         month: monthLabel,
         monthKey,
@@ -368,17 +558,9 @@ export const getBalanceData = (
     }
   }
 
-  // STRICT: Final verification - ensure all months belong to selected year
-  const verified = finalBalanceData.filter(item => {
-    const itemYear = parseInt(item.monthKey.substring(0, 4));
-    return itemYear === selectedYear;
-  });
+  const verified = finalBalanceData.filter(
+    (item) => parseInt(item.monthKey.substring(0, 4)) === selectedYear
+  );
 
-  if (verified.length !== 12) {
-    console.warn(`[getBalanceData] Expected 12 months for year ${selectedYear}, got ${verified.length}`);
-    console.warn(`[getBalanceData] MonthKeys:`, finalBalanceData.map(d => d.monthKey));
-  }
-
-  // Return exactly 12 months - should always be 12 since we build it explicitly
   return verified.length === 12 ? verified : finalBalanceData;
 };

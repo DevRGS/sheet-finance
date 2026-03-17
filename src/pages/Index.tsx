@@ -2,9 +2,13 @@ import { useState } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { DashboardStats } from '@/components/finance/DashboardStats';
+import { DashboardFilter } from '@/components/finance/DashboardFilter';
 import { MonthlyChart } from '@/components/finance/MonthlyChart';
 import { CategoryChart } from '@/components/finance/CategoryChart';
 import { BalanceChart } from '@/components/finance/BalanceChart';
+import { BillsOverviewChart } from '@/components/finance/BillsOverviewChart';
+import { InsightsCard } from '@/components/finance/InsightsCard';
+import { BudgetWidget } from '@/components/finance/BudgetWidget';
 import { RecentTransactions } from '@/components/finance/RecentTransactions';
 import { GoalsCard } from '@/components/finance/GoalsCard';
 import { TransactionForm } from '@/components/finance/TransactionForm';
@@ -42,18 +46,25 @@ const Index = () => {
           </Alert>
         )}
 
+        <DashboardFilter />
         <DashboardStats />
+        <BillsOverviewChart />
 
         <div className="grid gap-4 sm:gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 min-w-0">
             <MonthlyChart />
           </div>
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1 min-w-0 overflow-hidden">
             <CategoryChart />
           </div>
         </div>
 
         <BalanceChart />
+
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
+          <InsightsCard />
+          <BudgetWidget />
+        </div>
 
         <GoalsCard />
 

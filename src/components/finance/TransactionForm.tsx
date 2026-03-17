@@ -34,6 +34,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { Transaction, TransactionType, PaymentMethod } from '@/types/finance';
+import { Landmark } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
@@ -46,6 +47,7 @@ const formSchema = z.object({
   forma_pagamento: z.enum(['Cartão', 'PIX', 'Dinheiro', 'Transferência', 'Boleto'], {
     required_error: 'Selecione a forma de pagamento',
   }),
+  conta_id: z.string().optional(),
   observacao: z.string().max(200, 'Máximo 200 caracteres').optional(),
 });
 
@@ -58,7 +60,7 @@ interface TransactionFormProps {
 }
 
 export function TransactionForm({ open, onOpenChange, transaction }: TransactionFormProps) {
-  const { categories, addTransaction, updateTransaction, isLoading } = useFinanceContext();
+  const { categories, bankAccounts, addTransaction, updateTransaction, isLoading } = useFinanceContext();
   const [calendarOpen, setCalendarOpen] = useState(false);
 
   const form = useForm<FormData>({
@@ -75,6 +77,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
           valor: transaction.valor.toString(),
           categoria: transaction.categoria,
           forma_pagamento: transaction.forma_pagamento,
+          conta_id: transaction.conta_id || '',
           observacao: transaction.observacao || '',
         }
       : {
@@ -83,6 +86,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
           valor: '',
           categoria: '',
           forma_pagamento: 'PIX',
+          conta_id: '',
           observacao: '',
         },
   });
@@ -95,6 +99,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
       valor: parseFloat(data.valor.replace(',', '.')),
       categoria: data.categoria,
       forma_pagamento: data.forma_pagamento as PaymentMethod,
+      conta_id: data.conta_id || undefined,
       observacao: data.observacao || '',
     };
 
@@ -303,6 +308,40 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
                 </FormItem>
               )}
             />
+
+            {bankAccounts.filter((a) => a.ativo).length > 0 && (
+              <FormField
+                control={form.control}
+                name="conta_id"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="flex items-center gap-2">
+                      <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
+                      Conta (opcional)
+                    </FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Sem conta vinculada" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="">Sem conta</SelectItem>
+                        {bankAccounts.filter((a) => a.ativo).map((acc) => (
+                          <SelectItem key={acc.id} value={acc.id}>
+                            <span className="flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.cor }} />
+                              {acc.nome}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <FormField
               control={form.control}

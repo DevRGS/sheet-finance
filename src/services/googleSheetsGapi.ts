@@ -1,4 +1,4 @@
-import { Transaction, Category, Goal, GoogleSheetsConfig, GoalTransaction, RecurringTransaction, Bill, ForecastTransaction } from '@/types/finance';
+import { Transaction, Category, Goal, GoogleSheetsConfig, GoalTransaction, RecurringTransaction, Bill, ForecastTransaction, Budget, BankAccount } from '@/types/finance';
 
 import { getValidToken } from './googleApiService';
 
@@ -214,6 +214,62 @@ async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number):
   }
 }
 
+export interface SpreadsheetItem {
+  id: string;
+  name: string;
+  modifiedTime?: string;
+}
+
+// List all spreadsheets accessible by the authenticated user via Drive API
+export async function listSpreadsheets(): Promise<SpreadsheetItem[]> {
+  const token = await getAccessToken();
+
+  const params = new URLSearchParams({
+    q: "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+    fields: 'files(id,name,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: '100',
+  });
+
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const message = errorData?.error?.message || `Erro ${response.status}`;
+    throw new Error(`Erro ao listar planilhas: ${message}`);
+  }
+
+  const data = await response.json();
+  return (data.files || []) as SpreadsheetItem[];
+}
+
+// Create a new spreadsheet with the given name
+export async function createSpreadsheet(name: string): Promise<string> {
+  await ensureGapiReady();
+
+  const response = await window.gapi.client.sheets.spreadsheets.create({
+    resource: {
+      properties: {
+        title: name,
+      },
+    },
+  });
+
+  const spreadsheetId = response.result.spreadsheetId;
+  if (!spreadsheetId) {
+    throw new Error('Não foi possível obter o ID da nova planilha.');
+  }
+
+  return spreadsheetId;
+}
+
 // Test connection
 export async function testConnection(credentials: GoogleSheetsConfig): Promise<{ success: boolean; message: string }> {
   try {
@@ -245,57 +301,98 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
     // Create missing sheets
     const requiredSheets = [
       { name: 'config', headers: ['chave', 'valor'] },
-      { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao'] },
+      { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao', 'recorrente_id', 'conta_id'] },
       { name: 'categorias', headers: ['id', 'nome', 'cor'] },
       { name: 'metas', headers: ['id', 'nome', 'valor_alvo', 'valor_atual', 'prazo', 'cor'] },
       { name: 'movimentacoes_metas', headers: ['id', 'goal_id', 'tipo', 'valor', 'data', 'observacao'] },
       { name: 'transacoes_recorrentes', headers: ['id', 'descricao', 'tipo', 'valor', 'categoria', 'forma_pagamento', 'data_inicio', 'recorrencia', 'fim_tipo', 'meses_duracao', 'ativo', 'observacao'] },
       { name: 'contas', headers: ['id', 'tipo', 'descricao', 'valor', 'categoria', 'data_vencimento', 'data_pagamento', 'pago', 'observacao'] },
+      { name: 'orcamentos', headers: ['id', 'categoria', 'valor_limite', 'mes'] },
+      { name: 'contas_bancarias', headers: ['id', 'nome', 'tipo', 'banco', 'saldo_inicial', 'cor', 'ativo'] },
     ];
 
     const sheetsToCreate = requiredSheets.filter(s => !existingSheets.includes(s.name));
 
+    // Create missing sheets (non-critical — wrapped so a failure here doesn't block access)
     if (sheetsToCreate.length > 0) {
-      await window.gapi.client.sheets.spreadsheets.batchUpdate({
-        spreadsheetId: credentials.sheetsId,
-        resource: {
-          requests: sheetsToCreate.map(sheet => ({
-            addSheet: {
-              properties: { title: sheet.name },
-            },
-          })),
-        },
-      });
-
-      // Add headers to new sheets
-      for (const sheet of sheetsToCreate) {
-        await appendToSheet(credentials.sheetsId, `${sheet.name}!A1`, [sheet.headers]);
+      try {
+        await window.gapi.client.sheets.spreadsheets.batchUpdate({
+          spreadsheetId: credentials.sheetsId,
+          resource: {
+            requests: sheetsToCreate.map(sheet => ({
+              addSheet: { properties: { title: sheet.name } },
+            })),
+          },
+        });
+        // Add headers to newly created sheets
+        for (const sheet of sheetsToCreate) {
+          try {
+            await appendToSheet(credentials.sheetsId, `${sheet.name}!A1`, [sheet.headers]);
+          } catch (headerErr) {
+            console.warn(`Could not add header to ${sheet.name}:`, headerErr);
+          }
+        }
+      } catch (createErr: any) {
+        // If sheets already exist (concurrent init) or another non-fatal error, continue
+        const msg: string = createErr?.result?.error?.message || createErr?.message || '';
+        if (!msg.includes('already exists')) {
+          console.warn('Could not create new sheets (non-fatal):', createErr);
+        }
       }
     }
 
-    // Add default categories if empty
-    const categories = await readSheet(credentials.sheetsId, 'categorias');
-    if (categories.length === 0) {
-      const defaultCategories = [
-        ['1', 'Alimentação', '#a78bfa'],
-        ['2', 'Moradia', '#c084fc'],
-        ['3', 'Transporte', '#818cf8'],
-        ['4', 'Educação', '#8b5cf6'],
-        ['5', 'Saúde', '#737373'],
-        ['6', 'Lazer', '#a855f7'],
-        ['7', 'Investimentos', '#22c55e'],
-        ['8', 'Outros', '#6b7280'],
-      ];
-      await appendToSheet(credentials.sheetsId, 'categorias!A2', defaultCategories);
+    // Migrate transacoes header columns if missing
+    if (existingSheets.includes('transacoes')) {
+      try {
+        const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+          spreadsheetId: credentials.sheetsId,
+          range: 'transacoes!1:1',
+        });
+        let headers: string[] = headerRes.result.values?.[0] || [];
+        let changed = false;
+        for (const col of ['recorrente_id', 'conta_id']) {
+          if (headers.length > 0 && !headers.includes(col)) {
+            headers = [...headers, col];
+            changed = true;
+          }
+        }
+        if (changed) await updateSheet(credentials.sheetsId, 'transacoes!A1', [headers]);
+      } catch (e) {
+        console.warn('Could not migrate transacoes header:', e);
+      }
     }
 
-    // Add config entries if empty
-    const config = await readSheet(credentials.sheetsId, 'config');
-    if (config.length === 0) {
-      await appendToSheet(credentials.sheetsId, 'config!A2', [
-        ['data_criacao', new Date().toISOString()],
-        ['versao', '1.0.0'],
-      ]);
+    // Seed default categories if the sheet is empty (non-critical)
+    try {
+      const categories = await readSheet(credentials.sheetsId, 'categorias');
+      if (categories.length === 0) {
+        const defaultCategories = [
+          ['1', 'Alimentação', '#a78bfa'],
+          ['2', 'Moradia', '#c084fc'],
+          ['3', 'Transporte', '#818cf8'],
+          ['4', 'Educação', '#8b5cf6'],
+          ['5', 'Saúde', '#737373'],
+          ['6', 'Lazer', '#a855f7'],
+          ['7', 'Investimentos', '#22c55e'],
+          ['8', 'Outros', '#6b7280'],
+        ];
+        await appendToSheet(credentials.sheetsId, 'categorias!A2', defaultCategories);
+      }
+    } catch (e) {
+      console.warn('Could not seed categories:', e);
+    }
+
+    // Seed config metadata if empty (non-critical)
+    try {
+      const config = await readSheet(credentials.sheetsId, 'config');
+      if (config.length === 0) {
+        await appendToSheet(credentials.sheetsId, 'config!A2', [
+          ['data_criacao', new Date().toISOString()],
+          ['versao', '2.0.0'],
+        ]);
+      }
+    } catch (e) {
+      console.warn('Could not seed config:', e);
     }
 
     return { success: true, message: 'Planilha inicializada com sucesso!' };
@@ -318,7 +415,9 @@ export async function fetchTransactions(credentials: GoogleSheetsConfig): Promis
       valor: parseFloat(String(row.valor || '0')) || 0,
       categoria: String(row.categoria || ''),
       forma_pagamento: row.forma_pagamento as Transaction['forma_pagamento'],
-      observacao: String(row.observacao || ''),
+      observacao: String(row.observacao || '') || undefined,
+      recorrente_id: String(row.recorrente_id || '') || undefined,
+      conta_id: String(row.conta_id || '') || undefined,
     }));
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -341,12 +440,41 @@ export async function addTransaction(
       transaction.categoria || '',
       transaction.forma_pagamento || '',
       transaction.observacao || '',
+      transaction.recorrente_id || '',
+      transaction.conta_id || '',
     ];
 
     await appendToSheet(credentials.sheetsId, 'transacoes!A2', [transactionData]);
     return true;
   } catch (error) {
     console.error('Error adding transaction:', error);
+    return false;
+  }
+}
+
+// Batch-add multiple transactions at once (used for recurring materialization)
+export async function addTransactionsBatch(
+  transactions: Omit<Transaction, 'id'>[],
+  credentials: GoogleSheetsConfig
+): Promise<boolean> {
+  if (transactions.length === 0) return true;
+  try {
+    const rows = transactions.map((t) => [
+      `${Date.now()}${Math.floor(Math.random() * 100000)}`,
+      t.data || '',
+      t.tipo || '',
+      t.descricao || '',
+      t.valor?.toString() || '0',
+      t.categoria || '',
+      t.forma_pagamento || '',
+      t.observacao || '',
+      t.recorrente_id || '',
+      t.conta_id || '',
+    ]);
+    await appendToSheet(credentials.sheetsId, 'transacoes!A2', rows);
+    return true;
+  } catch (error) {
+    console.error('Error batch adding transactions:', error);
     return false;
   }
 }
@@ -372,6 +500,8 @@ export async function updateTransaction(
       updated.categoria,
       updated.forma_pagamento,
       updated.observacao || '',
+      updated.recorrente_id || '',
+      updated.conta_id || '',
     ];
 
     await updateSheet(credentials.sheetsId, `transacoes!A${rowIndex + 2}`, [row]);
@@ -1082,6 +1212,117 @@ export async function deleteBill(
     return true;
   } catch (error) {
     console.error('Error deleting bill:', error);
+    return false;
+  }
+}
+
+// ── Budgets ───────────────────────────────────────────────────────────────────
+
+export async function fetchBudgets(credentials: GoogleSheetsConfig): Promise<Budget[]> {
+  try {
+    const data = await readSheet(credentials.sheetsId, 'orcamentos');
+    return data.map(row => ({
+      id: String(row.id || ''),
+      categoria: String(row.categoria || ''),
+      valor_limite: parseFloat(String(row.valor_limite || '0')) || 0,
+      mes: String(row.mes || ''),
+    }));
+  } catch (error) {
+    console.error('Error fetching budgets:', error);
+    return [];
+  }
+}
+
+export async function addBudget(budget: Omit<Budget, 'id'>, credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const row = [Date.now().toString(), budget.categoria, budget.valor_limite.toString(), budget.mes || ''];
+    await appendToSheet(credentials.sheetsId, 'orcamentos!A2', [row]);
+    return true;
+  } catch (error) {
+    console.error('Error adding budget:', error);
+    return false;
+  }
+}
+
+export async function updateBudget(id: string, budget: Partial<Budget>, budgets: Budget[], credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const rowIndex = budgets.findIndex(b => b.id === id);
+    if (rowIndex === -1) return false;
+    const updated = { ...budgets[rowIndex], ...budget };
+    const row = [updated.id, updated.categoria, updated.valor_limite.toString(), updated.mes || ''];
+    await updateSheet(credentials.sheetsId, `orcamentos!A${rowIndex + 2}`, [row]);
+    return true;
+  } catch (error) {
+    console.error('Error updating budget:', error);
+    return false;
+  }
+}
+
+export async function deleteBudget(id: string, budgets: Budget[], credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const rowIndex = budgets.findIndex(b => b.id === id);
+    if (rowIndex === -1) return false;
+    await deleteRow(credentials.sheetsId, 'orcamentos', rowIndex);
+    return true;
+  } catch (error) {
+    console.error('Error deleting budget:', error);
+    return false;
+  }
+}
+
+// ── Bank Accounts ─────────────────────────────────────────────────────────────
+
+export async function fetchBankAccounts(credentials: GoogleSheetsConfig): Promise<BankAccount[]> {
+  try {
+    const data = await readSheet(credentials.sheetsId, 'contas_bancarias');
+    return data.map(row => ({
+      id: String(row.id || ''),
+      nome: String(row.nome || ''),
+      tipo: (row.tipo as BankAccount['tipo']) || 'corrente',
+      banco: String(row.banco || ''),
+      saldo_inicial: parseFloat(String(row.saldo_inicial || '0')) || 0,
+      cor: String(row.cor || '#7c3aed'),
+      ativo: String(row.ativo || 'true').toLowerCase() === 'true',
+    }));
+  } catch (error) {
+    console.error('Error fetching bank accounts:', error);
+    return [];
+  }
+}
+
+export async function addBankAccount(account: Omit<BankAccount, 'id'>, credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const row = [Date.now().toString(), account.nome, account.tipo, account.banco || '', account.saldo_inicial.toString(), account.cor, account.ativo.toString()];
+    await appendToSheet(credentials.sheetsId, 'contas_bancarias!A2', [row]);
+    return true;
+  } catch (error) {
+    console.error('Error adding bank account:', error);
+    return false;
+  }
+}
+
+export async function updateBankAccount(id: string, account: Partial<BankAccount>, accounts: BankAccount[], credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const rowIndex = accounts.findIndex(a => a.id === id);
+    if (rowIndex === -1) return false;
+    const updated = { ...accounts[rowIndex], ...account };
+    const row = [updated.id, updated.nome, updated.tipo, updated.banco || '', updated.saldo_inicial.toString(), updated.cor, updated.ativo.toString()];
+    await updateSheet(credentials.sheetsId, `contas_bancarias!A${rowIndex + 2}`, [row]);
+    return true;
+  } catch (error) {
+    console.error('Error updating bank account:', error);
+    return false;
+  }
+}
+
+export async function deleteBankAccount(id: string, accounts: BankAccount[], credentials: GoogleSheetsConfig): Promise<boolean> {
+  try {
+    const rowIndex = accounts.findIndex(a => a.id === id);
+    if (rowIndex === -1) return false;
+    await deleteRow(credentials.sheetsId, 'contas_bancarias', rowIndex);
+    return true;
+  } catch (error) {
+    console.error('Error deleting bank account:', error);
     return false;
   }
 }

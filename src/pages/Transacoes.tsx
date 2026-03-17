@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Filter, X, Calendar, Plus } from 'lucide-react';
+import { Search, Filter, X, Calendar, Plus, Upload } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -10,6 +10,7 @@ import { RecurringTransactionsList } from '@/components/finance/RecurringTransac
 import { ForecastCard } from '@/components/finance/ForecastCard';
 import { BillsList } from '@/components/finance/BillsList';
 import { BillForm } from '@/components/finance/BillForm';
+import { ImportModal } from '@/components/finance/ImportModal';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -29,6 +30,7 @@ import { cn } from '@/lib/utils';
 const Transacoes = () => {
   const [formOpen, setFormOpen] = useState(false);
   const [billFormOpen, setBillFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const { categories, filters, setFilters, filteredTransactions } = useFinanceContext();
   const [dateRangeOpen, setDateRangeOpen] = useState(false);
 
@@ -50,7 +52,16 @@ const Transacoes = () => {
 
   return (
     <AppLayout>
-      <AppHeader title="Transações" onNewTransaction={() => setFormOpen(true)} />
+      <AppHeader
+        title="Transações"
+        onNewTransaction={() => setFormOpen(true)}
+        extra={
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} className="gap-2">
+            <Upload className="h-4 w-4" />
+            <span className="hidden sm:inline">Importar</span>
+          </Button>
+        }
+      />
 
       <main className="flex-1 space-y-4 p-3 sm:space-y-6 sm:p-4 md:p-6">
         <Tabs defaultValue="transactions" className="space-y-4 sm:space-y-6">
@@ -289,6 +300,7 @@ const Transacoes = () => {
 
       <TransactionForm open={formOpen} onOpenChange={setFormOpen} />
       <BillForm open={billFormOpen} onOpenChange={setBillFormOpen} />
+      <ImportModal open={importOpen} onOpenChange={setImportOpen} />
     </AppLayout>
   );
 };

@@ -1,44 +1,221 @@
-import { useState, useEffect } from 'react';
-import { Loader2, CheckCircle2, XCircle, Database, RefreshCw, Cloud, AlertTriangle, Save } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { useTheme } from 'next-themes';
+import {
+  Loader2, CheckCircle2, XCircle, RefreshCw, Database, Cloud,
+  AlertTriangle, Plus, FileSpreadsheet, Sun, Moon, ExternalLink,
+  ArrowRightLeft, Tags, Target, Landmark, PiggyBank, Settings2,
+  Layers, Info,
+} from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { useGoogleSheetsConfig } from '@/hooks/useGoogleSheetsConfig';
-import { useGoogleAuth } from '@/hooks/useGoogleAuth';
+import { useGoogleAuthContext } from '@/contexts/GoogleAuthContext';
+import { listSpreadsheets, createSpreadsheet, SpreadsheetItem } from '@/services/googleSheetsGapi';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
+
+const FINANCE_FLOW_NAME = 'FinanceFlow';
+const AUTO_CONNECT_KEY = 'auto_connect_attempts';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Appearance card
+// ─────────────────────────────────────────────────────────────────────────────
+
+function AppearanceCard() {
+  const { theme, setTheme } = useTheme();
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Sun className="h-5 w-5" />
+          Aparência
+        </CardTitle>
+        <CardDescription>
+          Escolha o tema visual da aplicação. A preferência é salva automaticamente.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-3 max-w-sm">
+          <button
+            onClick={() => setTheme('light')}
+            className={cn(
+              'flex flex-col items-center gap-3 rounded-xl border-2 p-4 transition-all hover:bg-accent',
+              theme === 'light'
+                ? 'border-primary bg-primary/5'
+                : 'border-border bg-background'
+            )}
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+              <Sun className="h-6 w-6" />
+            </div>
+            <div className="text-center">
+              <p className={cn('text-sm font-semibold', theme === 'light' && 'text-primary')}>
+                Claro
+              </p>
+              <p className="text-xs text-muted-foreground">Fundo branco</p>
+            </div>
+            {theme === 'light' && (
+              <Badge variant="default" className="text-xs">Ativo</Badge>
+            )}
+          </button>
+
+          <button
+            onClick={() => setTheme('dark')}
+            className={cn(
+              'flex flex-col items-center gap-3 rounded-xl border-2 p-4 transition-all hover:bg-accent',
+              theme === 'dark'
+                ? 'border-primary bg-primary/5'
+                : 'border-border bg-background'
+            )}
+          >
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-900/40 text-violet-400">
+              <Moon className="h-6 w-6" />
+            </div>
+            <div className="text-center">
+              <p className={cn('text-sm font-semibold', theme === 'dark' && 'text-primary')}>
+                Escuro
+              </p>
+              <p className="text-xs text-muted-foreground">Fundo escuro</p>
+            </div>
+            {theme === 'dark' && (
+              <Badge variant="default" className="text-xs">Ativo</Badge>
+            )}
+          </button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main page
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SYNCED_SHEETS = [
+  { icon: ArrowRightLeft, label: 'Transações',       tab: 'transacoes',       desc: 'Receitas e despesas' },
+  { icon: Tags,           label: 'Categorias',       tab: 'categorias',       desc: 'Organização por tipo' },
+  { icon: Target,         label: 'Metas',            tab: 'metas',            desc: 'Objetivos financeiros' },
+  { icon: Landmark,       label: 'Contas',           tab: 'contas_bancarias', desc: 'Contas bancárias' },
+  { icon: PiggyBank,      label: 'Orçamentos',       tab: 'orcamentos',       desc: 'Limites por categoria' },
+  { icon: FileSpreadsheet,label: 'Recorrências',     tab: 'recorrencias',     desc: 'Lançamentos automáticos' },
+  { icon: Settings2,      label: 'Contas a pagar',   tab: 'contas_pagar',     desc: 'Bills e recebíveis' },
+  { icon: Layers,         label: 'Configurações',    tab: 'config',           desc: 'Parâmetros gerais' },
+];
+
+const SETUP_STEPS = [
+  {
+    step: '01',
+    title: 'Crie um projeto no Google Cloud',
+    desc: 'Acesse o console do Google Cloud, crie um projeto novo (ex.: "FinanceFlow") e anote o nome do projeto.',
+    link: { href: 'https://console.cloud.google.com/projectcreate', label: 'Abrir Google Cloud Console' },
+  },
+  {
+    step: '02',
+    title: 'Habilite as APIs necessárias',
+    desc: 'Dentro do projeto, vá em "APIs e Serviços" → "Biblioteca" e habilite as duas APIs: Google Sheets API e Google Drive API.',
+    link: { href: 'https://console.cloud.google.com/apis/library', label: 'Ir para Biblioteca de APIs' },
+  },
+  {
+    step: '03',
+    title: 'Configure a Tela de Consentimento OAuth',
+    desc: 'Em "APIs e Serviços" → "Tela de consentimento OAuth", selecione "Externo", preencha o nome do app e adicione seu e-mail como usuário de teste. Isso permite que você se autentique antes da verificação do app.',
+  },
+  {
+    step: '04',
+    title: 'Crie as credenciais OAuth 2.0',
+    desc: 'Em "Credenciais", clique em "Criar credenciais" → "ID do cliente OAuth". Escolha tipo "Aplicativo da Web". Em "Origens JavaScript autorizadas" adicione: http://localhost:8080 (desenvolvimento) e o domínio de produção.',
+    link: { href: 'https://console.cloud.google.com/apis/credentials', label: 'Ir para Credenciais' },
+  },
+  {
+    step: '05',
+    title: 'Configure a variável de ambiente',
+    desc: 'Copie o "Client ID" gerado. No arquivo .env.local na raiz do projeto, defina: VITE_GOOGLE_CLIENT_ID=seu-client-id-aqui e reinicie o servidor de desenvolvimento.',
+  },
+  {
+    step: '06',
+    title: 'Conecte sua conta Google',
+    desc: 'De volta ao FinanceFlow, clique em "Conectar com Google" acima. Faça login com a conta que tem permissão na planilha. O acesso solicitado é somente para Sheets e Drive do seu próprio Google Drive.',
+  },
+  {
+    step: '07',
+    title: 'Selecione ou crie a planilha',
+    desc: 'Após autenticar, suas planilhas do Drive aparecem na lista acima. Selecione uma existente ou clique em "Criar planilha FinanceFlow" para criar uma nova. A estrutura de abas é criada automaticamente na primeira conexão.',
+  },
+];
 
 const Configuracoes = () => {
-  const { isConnected, isInitializing, connectToSheets, loadData } = useFinanceContext();
-  const { config, saveConfig, isValid, isLoading: configLoading } = useGoogleSheetsConfig();
-  const { isSignedIn, isLoading: authLoading, signIn, signOut, error: authError, authData } = useGoogleAuth();
-  const [connectionResult, setConnectionResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  
-  const [formData, setFormData] = useState({
-    sheetsId: '',
-  });
+  const { isConnected, isInitializing, connectionError, retryConnection } = useFinanceContext();
+  const { config, saveConfig, isValid } = useGoogleSheetsConfig();
+  const { isSignedIn, isLoading: authLoading, signIn, signOut, error: authError, authData } =
+    useGoogleAuthContext();
 
-  // Load config into form when it's available
-  useEffect(() => {
-    if (config && !configLoading) {
-      setFormData({
-        sheetsId: config.sheetsId || '',
-      });
+  const [spreadsheets, setSpreadsheets] = useState<SpreadsheetItem[]>([]);
+  const [isLoadingSheets, setIsLoadingSheets] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [sheetsError, setSheetsError] = useState<string | null>(null);
+
+  const handleLoadSpreadsheets = useCallback(async () => {
+    setIsLoadingSheets(true);
+    setSheetsError(null);
+    try {
+      const sheets = await listSpreadsheets();
+      setSpreadsheets(sheets);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao listar planilhas';
+      setSheetsError(message);
+    } finally {
+      setIsLoadingSheets(false);
     }
-  }, [config, configLoading]);
+  }, []);
+
+  useEffect(() => {
+    if (isSignedIn) {
+      handleLoadSpreadsheets();
+    } else {
+      setSpreadsheets([]);
+      setSheetsError(null);
+    }
+  }, [isSignedIn, handleLoadSpreadsheets]);
+
+  const handleSelectSpreadsheet = (id: string) => {
+    const currentConfig = config || { isConnected: false };
+    const saved = saveConfig({ ...currentConfig, sheetsId: id, isConnected: false });
+    if (saved) {
+      localStorage.removeItem(AUTO_CONNECT_KEY);
+      toast.success('Planilha selecionada! Inicializando e carregando dados...');
+    }
+  };
+
+  const handleCreateSpreadsheet = async () => {
+    setIsCreating(true);
+    try {
+      const spreadsheetId = await createSpreadsheet(FINANCE_FLOW_NAME);
+      await handleLoadSpreadsheets();
+      const currentConfig = config || { isConnected: false };
+      saveConfig({ ...currentConfig, sheetsId: spreadsheetId, isConnected: false });
+      localStorage.removeItem(AUTO_CONNECT_KEY);
+      toast.success(`Planilha "${FINANCE_FLOW_NAME}" criada! Inicializando estrutura...`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erro ao criar planilha';
+      toast.error(message);
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   const handleSignIn = async () => {
     try {
-      const authData = await signIn();
-      toast.success(`Conectado com Google com sucesso! (${authData.email})`);
+      const result = await signIn();
+      toast.success(`Conectado como ${result.email}`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao conectar com Google';
-      toast.error(errorMessage);
+      toast.error(error instanceof Error ? error.message : 'Erro ao conectar com Google');
     }
   };
 
@@ -46,226 +223,50 @@ const Configuracoes = () => {
     try {
       await signOut();
       toast.success('Desconectado com sucesso!');
-    } catch (error) {
+    } catch {
       toast.error('Erro ao desconectar');
     }
-  };
-
-  const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleSaveCredentials = async () => {
-    const trimmedSheetsId = formData.sheetsId.trim();
-
-    if (!trimmedSheetsId) {
-      toast.error('Preencha o ID da Planilha');
-      return;
-    }
-
-    // Validate sheets ID (should be reasonably long)
-    if (trimmedSheetsId.length < 10) {
-      toast.error('O ID da planilha parece estar inválido. Verifique se copiou o ID completo da URL.');
-      return;
-    }
-
-    setIsSaving(true);
-    try {
-      const currentConfig = config || { isConnected: false };
-      const saved = saveConfig({
-        ...currentConfig,
-        sheetsId: trimmedSheetsId,
-        isConnected: false,
-      });
-
-      if (saved) {
-        toast.success('ID da Planilha salvo com sucesso!');
-        // Force a small delay to ensure state updates
-        setTimeout(() => {
-          console.log('Config saved, isValid should update');
-        }, 100);
-      } else {
-        toast.error('Erro ao salvar credenciais');
-      }
-    } catch (error) {
-      console.error('Error saving credentials:', error);
-      toast.error('Erro ao salvar credenciais');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleConnect = async () => {
-    // Double check config before connecting
-    if (!config || !isValid) {
-      console.log('Config state:', { config, isValid, formData });
-      toast.error('Configure e salve as credenciais antes de conectar');
-      return;
-    }
-
-    setConnectionResult(null);
-    // Reset auto-connect attempts when manually connecting
-    localStorage.removeItem('auto_connect_attempts');
-    const result = await connectToSheets(true);
-    setConnectionResult(result);
-    
-    if (result.success) {
-      toast.success('Conexão estabelecida com sucesso!');
-    } else {
-      toast.error(result.message || 'Erro ao conectar');
-    }
-  };
-
-  const handleRefresh = async () => {
-    await loadData();
-    toast.success('Dados atualizados!');
   };
 
   return (
     <AppLayout>
       <AppHeader title="Configurações" />
 
-      <main className="flex-1 space-y-6 p-4 md:p-6">
-        {/* Connection Status */}
+      <main className="flex-1 space-y-6 p-4 md:p-6 max-w-3xl mx-auto w-full">
+
+        {/* ── Aparência ─────────────────────────────────────────────────────── */}
+        <AppearanceCard />
+
+        {/* ── Conexão Google Sheets ──────────────────────────────────────── */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Database className="h-5 w-5" />
-              Status da Conexão
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                {isConnected ? (
-                  <>
-                    <CheckCircle2 className="h-6 w-6 text-emerald-500" />
-                    <div>
-                      <p className="font-medium text-emerald-600">Conectado</p>
-                      <p className="text-sm text-muted-foreground">
-                        Google Sheets configurado e sincronizado
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="h-6 w-6 text-muted-foreground" />
-                    <div>
-                      <p className="font-medium">Não conectado</p>
-                      <p className="text-sm text-muted-foreground">
-                        Clique em conectar para sincronizar com Google Sheets
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
-              
-              <div className="flex gap-2">
-                {isConnected && (
-                  <Button variant="outline" onClick={handleRefresh} className="gap-2">
-                    <RefreshCw className="h-4 w-4" />
-                    Atualizar Dados
-                  </Button>
-                )}
-                <Button 
-                  onClick={handleConnect} 
-                  disabled={isInitializing || !isValid || !isSignedIn} 
-                  className="gap-2"
-                >
-                  {isInitializing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Cloud className="h-4 w-4" />
-                  )}
-                  {isConnected ? 'Reconectar' : 'Conectar'}
-                </Button>
-              </div>
-            </div>
-
-            {connectionResult && (
-              <Alert
-                className="mt-4"
-                variant={connectionResult.success ? 'default' : 'destructive'}
-              >
-                {connectionResult.success ? (
-                  <CheckCircle2 className="h-4 w-4" />
-                ) : (
-                  <XCircle className="h-4 w-4" />
-                )}
-                <AlertTitle>
-                  {connectionResult.success ? 'Conexão bem sucedida!' : 'Erro na conexão'}
-                </AlertTitle>
-                <AlertDescription>{connectionResult.message}</AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Credentials Form */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Database className="h-5 w-5" />
-              Credenciais do Google Sheets
+              Conexão com Google Sheets
             </CardTitle>
             <CardDescription>
-              Configure o ID da planilha e conecte sua conta Google para sincronizar dados.
+              Todos os seus dados são salvos diretamente no Google Drive — sem banco de dados externo.
+              Conecte sua conta e escolha (ou crie) a planilha que o FinanceFlow vai usar.
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="sheetsId">
-                  ID da Planilha <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="sheetsId"
-                  type="text"
-                  placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
-                  value={formData.sheetsId}
-                  onChange={(e) => handleInputChange('sheetsId', e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  O ID está na URL da planilha: docs.google.com/spreadsheets/d/<strong>ID_AQUI</strong>/edit
-                </p>
-              </div>
+          <CardContent className="space-y-5">
 
-              <Button
-                onClick={handleSaveCredentials}
-                disabled={isSaving}
-                className="w-full gap-2"
-              >
-                {isSaving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
-                Salvar ID da Planilha
-              </Button>
-
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-background px-2 text-muted-foreground">Autorização OAuth 2.0</span>
-                </div>
-              </div>
-
+            {/* Auth section */}
+            <div className="space-y-3">
               {isSignedIn && authData ? (
-                <Alert>
+                <Alert className="border-emerald-500/40 bg-emerald-500/5">
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  <AlertTitle>Conectado</AlertTitle>
+                  <AlertTitle className="text-emerald-700 dark:text-emerald-400">Conta conectada</AlertTitle>
                   <AlertDescription>
-                    Conectado como: <strong>{authData.email}</strong>. Você pode desconectar se necessário.
+                    Autenticado como <strong>{authData.email}</strong>
                   </AlertDescription>
                 </Alert>
               ) : (
                 <Alert>
                   <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>Autorização Necessária</AlertTitle>
+                  <AlertTitle>Autorização necessária</AlertTitle>
                   <AlertDescription>
-                    Você precisa conectar sua conta Google para usar o Google Sheets.
+                    Conecte sua conta Google para listar e selecionar uma planilha.
                   </AlertDescription>
                 </Alert>
               )}
@@ -273,161 +274,253 @@ const Configuracoes = () => {
               {authError && (
                 <Alert variant="destructive">
                   <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>Erro</AlertTitle>
+                  <AlertTitle>Erro de autenticação</AlertTitle>
                   <AlertDescription>{authError}</AlertDescription>
                 </Alert>
               )}
 
-              <div className="flex gap-2">
-                {isSignedIn ? (
-                  <Button
-                    onClick={handleSignOut}
-                    variant="outline"
-                    className="flex-1 gap-2"
-                    disabled={authLoading}
-                  >
-                    {authLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <XCircle className="h-4 w-4" />
-                    )}
-                    Desconectar
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={handleSignIn}
-                    className="flex-1 gap-2"
-                    disabled={authLoading}
-                  >
-                    {authLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Cloud className="h-4 w-4" />
-                    )}
-                    Conectar com Google
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            {/* Status das credenciais */}
-            <div className="rounded-lg border p-4 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Status das Credenciais:</span>
-                {isValid ? (
-                  <span className="flex items-center gap-2 text-sm text-emerald-600">
-                    <CheckCircle2 className="h-4 w-4" />
-                    Válidas
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2 text-sm text-destructive">
-                    <XCircle className="h-4 w-4" />
-                    Inválidas ou não salvas
-                  </span>
-                )}
-              </div>
-              {config && (
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p>ID Planilha: {config.sheetsId ? '✓ Preenchido' : '✗ Não preenchido'}</p>
-                  <p>Google Auth: {isSignedIn ? '✓ Conectado' : '✗ Não conectado'}</p>
-                </div>
+              {isSignedIn ? (
+                <Button onClick={handleSignOut} variant="outline" className="w-full gap-2" disabled={authLoading}>
+                  {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                  Desconectar conta Google
+                </Button>
+              ) : (
+                <Button onClick={handleSignIn} className="w-full gap-2" disabled={authLoading}>
+                  {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
+                  Conectar com Google
+                </Button>
               )}
             </div>
 
-            {isValid && isSignedIn ? (
+            {/* Spreadsheet picker */}
+            {isSignedIn && (
+              <>
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">Planilhas no Drive</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label>Selecione a planilha de destino</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleLoadSpreadsheets}
+                      disabled={isLoadingSheets}
+                      className="gap-1 h-8 text-xs"
+                    >
+                      <RefreshCw className={cn('h-3 w-3', isLoadingSheets && 'animate-spin')} />
+                      Atualizar
+                    </Button>
+                  </div>
+
+                  {isLoadingSheets ? (
+                    <div className="flex items-center justify-center rounded-lg border p-6 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                      <span className="text-sm">Carregando planilhas…</span>
+                    </div>
+                  ) : sheetsError ? (
+                    <Alert variant="destructive">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Erro ao carregar planilhas</AlertTitle>
+                      <AlertDescription>{sheetsError}</AlertDescription>
+                    </Alert>
+                  ) : spreadsheets.length > 0 ? (
+                    <div className="space-y-1 max-h-56 overflow-y-auto rounded-lg border p-1">
+                      {spreadsheets.map((sheet) => {
+                        const isSelected = config?.sheetsId === sheet.id;
+                        return (
+                          <button
+                            key={sheet.id}
+                            type="button"
+                            onClick={() => handleSelectSpreadsheet(sheet.id)}
+                            className={cn(
+                              'flex w-full items-center justify-between rounded-md px-3 py-2.5 text-left transition-colors hover:bg-accent',
+                              isSelected && 'bg-primary/10 border border-primary/30'
+                            )}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isSelected ? (
+                                <CheckCircle2 className="h-4 w-4 text-primary flex-shrink-0" />
+                              ) : (
+                                <FileSpreadsheet className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                              )}
+                              <span className={cn('text-sm truncate', isSelected && 'font-medium text-primary')}>
+                                {sheet.name}
+                              </span>
+                            </div>
+                            {isSelected && (
+                              <Badge variant="default" className="ml-2 text-xs flex-shrink-0">Selecionada</Badge>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-6 text-muted-foreground">
+                      <FileSpreadsheet className="h-8 w-8 mb-2 opacity-40" />
+                      <p className="text-sm">Nenhuma planilha encontrada no Drive</p>
+                      <p className="text-xs mt-1 opacity-70">Crie uma nova abaixo</p>
+                    </div>
+                  )}
+
+                  <Button
+                    variant="outline"
+                    onClick={handleCreateSpreadsheet}
+                    disabled={isCreating || isLoadingSheets}
+                    className="w-full gap-2"
+                  >
+                    {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                    Criar nova planilha "{FINANCE_FLOW_NAME}"
+                  </Button>
+                </div>
+              </>
+            )}
+
+            {/* Connection status */}
+            {isInitializing ? (
               <Alert>
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                <AlertTitle>Pronto para Conectar</AlertTitle>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <AlertTitle>Inicializando planilha…</AlertTitle>
                 <AlertDescription>
-                  Suas credenciais estão salvas e você está autenticado. Clique em "Conectar" para estabelecer a conexão com o Google Sheets.
+                  Verificando estrutura e criando as abas necessárias. Isso pode levar alguns segundos.
+                </AlertDescription>
+              </Alert>
+            ) : isConnected ? (
+              <Alert className="border-emerald-500/50 bg-emerald-500/5">
+                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <AlertTitle className="text-emerald-700 dark:text-emerald-400">Sincronizado com sucesso</AlertTitle>
+                <AlertDescription>
+                  Dados carregados da planilha selecionada. Todas as alterações são salvas automaticamente.
+                </AlertDescription>
+              </Alert>
+            ) : connectionError ? (
+              <Alert variant="destructive">
+                <XCircle className="h-4 w-4" />
+                <AlertTitle>Falha na conexão</AlertTitle>
+                <AlertDescription className="space-y-2">
+                  <p>{connectionError}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { retryConnection(); }}
+                    className="mt-2 gap-2 border-destructive/50 hover:bg-destructive/10"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Tentar novamente
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : isValid && isSignedIn ? (
+              <Alert>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <AlertTitle>Conectando automaticamente…</AlertTitle>
+                <AlertDescription>
+                  Estabelecendo conexão com a planilha selecionada.
                 </AlertDescription>
               </Alert>
             ) : (
               <Alert variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
-                <AlertTitle>Configuração Incompleta</AlertTitle>
+                <AlertTitle>Configuração incompleta</AlertTitle>
                 <AlertDescription>
-                  {!isValid && !isSignedIn 
-                    ? 'Preencha o ID da Planilha e faça login com Google antes de conectar.'
-                    : !isValid 
-                    ? 'Preencha o ID da Planilha e clique em "Salvar ID da Planilha" antes de conectar.'
-                    : 'Faça login com Google antes de conectar.'}
+                  {!isSignedIn
+                    ? 'Conecte sua conta Google para continuar.'
+                    : 'Selecione uma planilha existente ou crie uma nova acima.'}
                 </AlertDescription>
               </Alert>
             )}
-
-            <Alert>
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Importante</AlertTitle>
-              <AlertDescription>
-                <p>
-                  Certifique-se de que a planilha foi compartilhada com a conta Google que você conectou
-                  com permissão de <strong>Editor</strong>. Configure a variável de ambiente VITE_GOOGLE_CLIENT_ID
-                  com o Client ID do seu projeto Google Cloud.
-                </p>
-              </AlertDescription>
-            </Alert>
           </CardContent>
         </Card>
 
-        {/* Features */}
+        {/* ── Dados sincronizados ────────────────────────────────────────── */}
         <Card>
           <CardHeader>
-            <CardTitle>Funcionalidades Sincronizadas</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Layers className="h-5 w-5" />
+              Dados sincronizados
+            </CardTitle>
             <CardDescription>
-              Dados que serão salvos e carregados do Google Sheets
+              Cada item abaixo corresponde a uma aba da planilha no Google Drive. A estrutura é criada automaticamente na primeira conexão.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-lg border border-border p-4 text-center">
-                <p className="text-2xl font-bold text-primary">Transações</p>
-                <p className="text-sm text-muted-foreground">Aba: transacoes</p>
-              </div>
-              <div className="rounded-lg border border-border p-4 text-center">
-                <p className="text-2xl font-bold text-primary">Categorias</p>
-                <p className="text-sm text-muted-foreground">Aba: categorias</p>
-              </div>
-              <div className="rounded-lg border border-border p-4 text-center">
-                <p className="text-2xl font-bold text-primary">Metas</p>
-                <p className="text-sm text-muted-foreground">Aba: metas</p>
-              </div>
-              <div className="rounded-lg border border-border p-4 text-center">
-                <p className="text-2xl font-bold text-primary">Configurações</p>
-                <p className="text-sm text-muted-foreground">Aba: config</p>
-              </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {SYNCED_SHEETS.map(({ icon: Icon, label, tab, desc }) => (
+                <div
+                  key={tab}
+                  className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3"
+                >
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
+                    <Icon className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{label}</p>
+                    <p className="text-xs text-muted-foreground truncate">{desc}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>
 
-        {/* Help Section */}
+        {/* ── Guia de configuração ──────────────────────────────────────── */}
         <Card>
           <CardHeader>
-            <CardTitle>Como obter as credenciais?</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <Info className="h-5 w-5" />
+              Como configurar? — Guia passo a passo
+            </CardTitle>
+            <CardDescription>
+              Siga os passos abaixo para conectar o FinanceFlow ao seu Google Drive pela primeira vez.
+              O processo leva cerca de 5 minutos.
+            </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4 text-sm text-muted-foreground">
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">1. Criar projeto no Google Cloud</p>
-              <p>Acesse console.cloud.google.com e crie um novo projeto.</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">2. Habilitar API do Google Sheets</p>
-              <p>No painel de APIs, busque e habilite "Google Sheets API".</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">3. Criar credenciais OAuth 2.0</p>
-              <p>Em "Credenciais", crie credenciais OAuth 2.0 (tipo "Aplicativo da Web"). Não é necessário configurar URI de redirecionamento para client-side.</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">4. Configurar Client ID</p>
-              <p>Configure a variável de ambiente VITE_GOOGLE_CLIENT_ID com o Client ID do seu projeto Google Cloud.</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">5. Compartilhar planilha</p>
-              <p>Compartilhe sua planilha do Google Sheets com a conta Google que você conectou (como Editor).</p>
+          <CardContent>
+            <ol className="space-y-6">
+              {SETUP_STEPS.map(({ step, title, desc, link }) => (
+                <li key={step} className="flex gap-4">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                    {step}
+                  </div>
+                  <div className="space-y-1 pt-0.5">
+                    <p className="text-sm font-semibold text-foreground">{title}</p>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
+                    {link && (
+                      <a
+                        href={link.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        {link.label}
+                      </a>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-6 rounded-lg bg-amber-500/10 border border-amber-500/30 p-4">
+              <p className="text-sm font-medium text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                Dica importante
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Enquanto o app estiver em modo de "Teste" na tela de consentimento OAuth, apenas os e-mails
+                adicionados como usuários de teste poderão fazer login. Para uso pessoal isso é suficiente —
+                não é necessário publicar o app.
+              </p>
             </div>
           </CardContent>
         </Card>
+
       </main>
     </AppLayout>
   );

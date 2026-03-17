@@ -1,12 +1,15 @@
 import { createContext, useContext, ReactNode } from 'react';
 import { useFinance } from '@/hooks/useFinance';
+import { useGoogleAuthContext } from '@/contexts/GoogleAuthContext';
 
 type FinanceContextType = ReturnType<typeof useFinance>;
 
 const FinanceContext = createContext<FinanceContextType | null>(null);
 
 export function FinanceProvider({ children }: { children: ReactNode }) {
-  const finance = useFinance();
+  // Consume the shared auth state so auto-connect reacts to sign-in/silent-refresh
+  const { isSignedIn } = useGoogleAuthContext();
+  const finance = useFinance(isSignedIn);
 
   return (
     <FinanceContext.Provider value={finance}>

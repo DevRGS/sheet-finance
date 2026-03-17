@@ -11,6 +11,10 @@ export interface Transaction {
   categoria: string;
   forma_pagamento: PaymentMethod;
   observacao?: string;
+  /** ID da transação recorrente de origem (preenchido quando a entrada foi gerada automaticamente) */
+  recorrente_id?: string;
+  /** ID da conta bancária de origem/destino */
+  conta_id?: string;
 }
 
 export interface Category {
@@ -108,6 +112,32 @@ export interface ForecastTransaction {
   forma_pagamento: PaymentMethod;
   observacao?: string;
 }
+
+// ── Budget ────────────────────────────────────────────────────────────────────
+
+export interface Budget {
+  id: string;
+  categoria: string;
+  valor_limite: number;
+  /** YYYY-MM for a specific month, empty string for recurring monthly */
+  mes: string;
+}
+
+// ── Bank Account ──────────────────────────────────────────────────────────────
+
+export type AccountType = 'corrente' | 'poupanca' | 'investimento' | 'carteira' | 'cartao_credito';
+
+export interface BankAccount {
+  id: string;
+  nome: string;
+  tipo: AccountType;
+  banco: string;
+  saldo_inicial: number;
+  cor: string;
+  ativo: boolean;
+}
+
+// ── Bills ─────────────────────────────────────────────────────────────────────
 
 export type BillType = 'pagar' | 'receber';
 

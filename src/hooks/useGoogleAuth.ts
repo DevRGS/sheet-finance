@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   initializeGoogleAPI,
   loginWithGoogle,
+  silentTokenRefresh,
   getValidToken,
   saveAuthData,
   getAuthData,
+  getStoredEmail,
   clearAuthData,
   isAuthenticated,
   type GoogleAuthData,
@@ -25,21 +27,49 @@ export function useGoogleAuth() {
     authData: null,
   });
 
-  // Initialize Google API on mount
+  // Initialize: restore session or attempt silent refresh
   useEffect(() => {
     const init = async () => {
       try {
         await initializeGoogleAPI();
-        
-        // Check if user is already authenticated
-        const authData = getAuthData();
-        const authenticated = isAuthenticated();
 
+        // Case 1: valid token already in storage
+        if (isAuthenticated()) {
+          const authData = getAuthData();
+          setAuthState({
+            isSignedIn: true,
+            isLoading: false,
+            error: null,
+            authData,
+          });
+          return;
+        }
+
+        // Case 2: token expired but email stored — try silent refresh
+        const storedEmail = getStoredEmail();
+        if (storedEmail) {
+          try {
+            const newAuthData = await silentTokenRefresh(storedEmail);
+            saveAuthData(newAuthData);
+            setAuthState({
+              isSignedIn: true,
+              isLoading: false,
+              error: null,
+              authData: newAuthData,
+            });
+            return;
+          } catch {
+            // Silent refresh failed; user's Google session has ended
+            // Fall through to "not signed in" state
+          }
+        }
+
+        // Case 3: not authenticated, needs manual login
         setAuthState({
-          isSignedIn: authenticated,
+          isSignedIn: false,
           isLoading: false,
           error: null,
-          authData: authenticated ? authData : null,
+          authData: null,
         });
       } catch (error) {
         console.error('Error initializing Google API:', error);
@@ -55,13 +85,12 @@ export function useGoogleAuth() {
     init();
   }, []);
 
-  // Listen for storage changes (when auth data is updated in another tab)
+  // Listen for storage changes (sync state when auth changes in another tab)
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'google_auth_data') {
         const authData = getAuthData();
         const authenticated = isAuthenticated();
-        
         setAuthState(prev => ({
           ...prev,
           isSignedIn: authenticated,
@@ -77,31 +106,19 @@ export function useGoogleAuth() {
   const signIn = useCallback(async () => {
     try {
       setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
-
-      // Ensure Google API is initialized
       await initializeGoogleAPI();
-
-      // Login with Google
       const authData = await loginWithGoogle();
-
-      // Save to localStorage
       saveAuthData(authData);
-
       setAuthState({
         isSignedIn: true,
         isLoading: false,
         error: null,
-        authData: authData,
+        authData,
       });
-
       return authData;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer login';
-      setAuthState(prev => ({
-        ...prev,
-        isLoading: false,
-        error: errorMessage,
-      }));
+      setAuthState(prev => ({ ...prev, isLoading: false, error: errorMessage }));
       throw error;
     }
   }, []);
@@ -109,26 +126,18 @@ export function useGoogleAuth() {
   const signOut = useCallback(async () => {
     try {
       clearAuthData();
-      setAuthState({
-        isSignedIn: false,
-        isLoading: false,
-        error: null,
-        authData: null,
-      });
+      setAuthState({ isSignedIn: false, isLoading: false, error: null, authData: null });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer logout';
-      setAuthState(prev => ({
-        ...prev,
-        error: errorMessage,
-      }));
+      setAuthState(prev => ({ ...prev, error: errorMessage }));
     }
   }, []);
 
   const getAccessToken = useCallback(async (): Promise<string> => {
     try {
       return await getValidToken();
-    } catch (error) {
-      // If token is invalid, try to re-authenticate
+    } catch {
+      // Token unavailable — trigger full login
       const authData = await signIn();
       return authData.accessToken;
     }

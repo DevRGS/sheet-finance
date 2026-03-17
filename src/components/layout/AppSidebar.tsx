@@ -1,4 +1,5 @@
-import { LayoutDashboard, ArrowRightLeft, Settings, PieChart, Wallet } from 'lucide-react';
+import { LayoutDashboard, ArrowRightLeft, Settings, PieChart, Wallet, PiggyBank, CreditCard } from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
 
@@ -20,6 +21,8 @@ const menuItems = [
   { title: 'Dashboard', url: '/', icon: LayoutDashboard },
   { title: 'Transações', url: '/transacoes', icon: ArrowRightLeft },
   { title: 'Categorias', url: '/categorias', icon: PieChart },
+  { title: 'Orçamentos', url: '/orcamentos', icon: PiggyBank },
+  { title: 'Contas', url: '/contas', icon: CreditCard },
   { title: 'Configurações', url: '/configuracoes', icon: Settings },
 ];
 
@@ -71,11 +74,10 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-4">
+      <SidebarFooter className="border-t border-sidebar-border p-3 space-y-1">
+        <ThemeToggle collapsed={collapsed} />
         {!collapsed && (
-          <div className="text-xs text-muted-foreground">
-            <p>Versão 1.0.0</p>
-          </div>
+          <p className="px-2 text-xs text-muted-foreground">Versão 2.0.0</p>
         )}
       </SidebarFooter>
     </Sidebar>
