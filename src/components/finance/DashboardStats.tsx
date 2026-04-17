@@ -12,8 +12,11 @@ const PERIOD_LABELS: Record<DashboardPreset, { receitas: string; despesas: strin
 };
 
 export function DashboardStats() {
-  const { stats, dashboardPeriod } = useFinanceContext();
+  const { stats, dashboardPeriod, dashboardView } = useFinanceContext();
   const labels = PERIOD_LABELS[dashboardPeriod.preset];
+  const receitasTitle = dashboardView === 'previsto' ? labels.receitas.replace('Receitas', 'Receitas Previstas') : labels.receitas;
+  const despesasTitle = dashboardView === 'previsto' ? labels.despesas.replace('Despesas', 'Despesas Previstas') : labels.despesas;
+  const saldoTitle = dashboardView === 'previsto' ? labels.saldo.replace('Saldo', 'Saldo Previsto') : labels.saldo;
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -21,19 +24,19 @@ export function DashboardStats() {
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       <StatCard
-        title={labels.receitas}
+        title={receitasTitle}
         value={formatCurrency(stats.receitasMes)}
         icon={<TrendingUp className="h-5 w-5" />}
         variant="income"
       />
       <StatCard
-        title={labels.despesas}
+        title={despesasTitle}
         value={formatCurrency(stats.despesasMes)}
         icon={<TrendingDown className="h-5 w-5" />}
         variant="expense"
       />
       <StatCard
-        title={labels.saldo}
+        title={saldoTitle}
         value={formatCurrency(stats.saldoMes)}
         icon={<Wallet className="h-5 w-5" />}
         variant="balance"

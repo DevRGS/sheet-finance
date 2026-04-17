@@ -11,14 +11,14 @@ import {
 } from '@/types/finance';
 
 export const defaultCategories: Category[] = [
-  { id: '1', nome: 'Alimentação', cor: '#a78bfa' },
-  { id: '2', nome: 'Moradia', cor: '#c084fc' },
-  { id: '3', nome: 'Transporte', cor: '#818cf8' },
-  { id: '4', nome: 'Educação', cor: '#8b5cf6' },
-  { id: '5', nome: 'Saúde', cor: '#737373' },
-  { id: '6', nome: 'Lazer', cor: '#a855f7' },
-  { id: '7', nome: 'Investimentos', cor: '#22c55e' },
-  { id: '8', nome: 'Outros', cor: '#6b7280' },
+  { id: '1', nome: 'Alimentação', cor: '#a78bfa', tipo: 'Despesa' },
+  { id: '2', nome: 'Moradia', cor: '#c084fc', tipo: 'Despesa' },
+  { id: '3', nome: 'Transporte', cor: '#818cf8', tipo: 'Despesa' },
+  { id: '4', nome: 'Educação', cor: '#8b5cf6', tipo: 'Despesa' },
+  { id: '5', nome: 'Saúde', cor: '#737373', tipo: 'Despesa' },
+  { id: '6', nome: 'Lazer', cor: '#a855f7', tipo: 'Despesa' },
+  { id: '7', nome: 'Investimentos', cor: '#22c55e', tipo: 'Despesa' },
+  { id: '8', nome: 'Outros', cor: '#6b7280', tipo: 'Ambos' },
 ];
 
 // ─── Recurring transaction helpers ───────────────────────────────────────────

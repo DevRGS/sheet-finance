@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Transaction, Category, Goal, GoogleSheetsConfig, GoalTransaction, RecurringTransaction, Bill, ForecastTransaction, Budget, BankAccount } from '@/types/finance';
 
 import { getValidToken } from './googleApiService';
@@ -134,6 +135,55 @@ async function readSheet(sheetsId: string, range: string): Promise<Record<string
     console.error('Error reading sheet:', error);
     throw handleGoogleApiError(error);
   }
+}
+
+// Read raw values for a full sheet (A1 notation without explicit bounds).
+async function readSheetValues(sheetsId: string, sheetName: string): Promise<string[][]> {
+  await ensureGapiReady();
+  try {
+    const response = await window.gapi.client.sheets.spreadsheets.values.get({
+      spreadsheetId: sheetsId,
+      range: sheetName,
+    });
+    return (response.result.values || []) as string[][];
+  } catch (error: any) {
+    console.error('Error reading sheet values:', error);
+    throw handleGoogleApiError(error);
+  }
+}
+
+function mapRowToObject(headers: string[], row: string[]): Record<string, string> {
+  const obj: Record<string, string> = {};
+  headers.forEach((h, idx) => {
+    obj[h] = row[idx] ?? '';
+  });
+  return obj;
+}
+
+function generateId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
+  }
+}
+
+async function findRowIndexById(
+  sheetsId: string,
+  sheetName: string,
+  id: string
+): Promise<{ rowIndex0: number; headers: string[]; row: string[] }> {
+  const values = await readSheetValues(sheetsId, sheetName);
+  if (values.length < 2) throw new Error(`Sheet ${sheetName} está vazio ou sem cabeçalho.`);
+
+  const [headers, ...rows] = values;
+  const idCol = headers.findIndex((h: string) => h === 'id');
+  if (idCol === -1) throw new Error(`Sheet ${sheetName} não possui coluna 'id'.`);
+
+  const rowIndex0 = rows.findIndex((r: string[]) => String(r[idCol] || '') === id);
+  if (rowIndex0 === -1) throw new Error(`Registro não encontrado em ${sheetName} (id=${id}).`);
+
+  return { rowIndex0, headers: headers as string[], row: rows[rowIndex0] as string[] };
 }
 
 // Append to sheet using gapi
@@ -301,8 +351,8 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
     // Create missing sheets
     const requiredSheets = [
       { name: 'config', headers: ['chave', 'valor'] },
-      { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao', 'recorrente_id', 'conta_id'] },
-      { name: 'categorias', headers: ['id', 'nome', 'cor'] },
+      { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao', 'recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado'] },
+      { name: 'categorias', headers: ['id', 'nome', 'cor', 'tipo'] },
       { name: 'metas', headers: ['id', 'nome', 'valor_alvo', 'valor_atual', 'prazo', 'cor'] },
       { name: 'movimentacoes_metas', headers: ['id', 'goal_id', 'tipo', 'valor', 'data', 'observacao'] },
       { name: 'transacoes_recorrentes', headers: ['id', 'descricao', 'tipo', 'valor', 'categoria', 'forma_pagamento', 'data_inicio', 'recorrencia', 'fim_tipo', 'meses_duracao', 'ativo', 'observacao'] },
@@ -350,7 +400,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         });
         let headers: string[] = headerRes.result.values?.[0] || [];
         let changed = false;
-        for (const col of ['recorrente_id', 'conta_id']) {
+        for (const col of ['recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado']) {
           if (headers.length > 0 && !headers.includes(col)) {
             headers = [...headers, col];
             changed = true;
@@ -362,19 +412,43 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
       }
     }
 
+    // Migrate categorias header columns if missing
+    if (existingSheets.includes('categorias')) {
+      try {
+        const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+          spreadsheetId: credentials.sheetsId,
+          range: 'categorias!1:1',
+        });
+        let headers: string[] = headerRes.result.values?.[0] || [];
+        let changed = false;
+        for (const col of ['tipo']) {
+          if (headers.length > 0 && !headers.includes(col)) {
+            headers = [...headers, col];
+            changed = true;
+          }
+        }
+        if (changed) await updateSheet(credentials.sheetsId, 'categorias!A1', [headers]);
+      } catch (e) {
+        console.warn('Could not migrate categorias header:', e);
+      }
+    }
+
     // Seed default categories if the sheet is empty (non-critical)
     try {
       const categories = await readSheet(credentials.sheetsId, 'categorias');
       if (categories.length === 0) {
         const defaultCategories = [
-          ['1', 'Alimentação', '#a78bfa'],
-          ['2', 'Moradia', '#c084fc'],
-          ['3', 'Transporte', '#818cf8'],
-          ['4', 'Educação', '#8b5cf6'],
-          ['5', 'Saúde', '#737373'],
-          ['6', 'Lazer', '#a855f7'],
-          ['7', 'Investimentos', '#22c55e'],
-          ['8', 'Outros', '#6b7280'],
+          ['1', 'Alimentação', '#a78bfa', 'Despesa'],
+          ['2', 'Moradia', '#c084fc', 'Despesa'],
+          ['3', 'Transporte', '#818cf8', 'Despesa'],
+          ['4', 'Educação', '#8b5cf6', 'Despesa'],
+          ['5', 'Saúde', '#737373', 'Despesa'],
+          ['6', 'Lazer', '#a855f7', 'Despesa'],
+          ['7', 'Investimentos', '#22c55e', 'Despesa'],
+          ['8', 'Outros', '#6b7280', 'Ambos'],
+          ['9', 'Faturamento', '#16a34a', 'Receita'],
+          ['10', 'Salário', '#22c55e', 'Receita'],
+          ['11', 'Rendimentos', '#4ade80', 'Receita'],
         ];
         await appendToSheet(credentials.sheetsId, 'categorias!A2', defaultCategories);
       }
@@ -418,6 +492,9 @@ export async function fetchTransactions(credentials: GoogleSheetsConfig): Promis
       observacao: String(row.observacao || '') || undefined,
       recorrente_id: String(row.recorrente_id || '') || undefined,
       conta_id: String(row.conta_id || '') || undefined,
+      conta_destino_id: String(row.conta_destino_id || '') || undefined,
+      transferencia_id: String(row.transferencia_id || '') || undefined,
+      confirmado: String(row.confirmado || 'false').toLowerCase() === 'true',
     }));
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -432,7 +509,7 @@ export async function addTransaction(
 ): Promise<boolean> {
   try {
     const transactionData = [
-      Date.now().toString(),
+      generateId(),
       transaction.data || '',
       transaction.tipo || '',
       transaction.descricao || '',
@@ -442,6 +519,9 @@ export async function addTransaction(
       transaction.observacao || '',
       transaction.recorrente_id || '',
       transaction.conta_id || '',
+      transaction.conta_destino_id || '',
+      transaction.transferencia_id || '',
+      (transaction.confirmado ?? false).toString(),
     ];
 
     await appendToSheet(credentials.sheetsId, 'transacoes!A2', [transactionData]);
@@ -460,7 +540,7 @@ export async function addTransactionsBatch(
   if (transactions.length === 0) return true;
   try {
     const rows = transactions.map((t) => [
-      `${Date.now()}${Math.floor(Math.random() * 100000)}`,
+      generateId(),
       t.data || '',
       t.tipo || '',
       t.descricao || '',
@@ -470,6 +550,9 @@ export async function addTransactionsBatch(
       t.observacao || '',
       t.recorrente_id || '',
       t.conta_id || '',
+      t.conta_destino_id || '',
+      t.transferencia_id || '',
+      (t.confirmado ?? false).toString(),
     ]);
     await appendToSheet(credentials.sheetsId, 'transacoes!A2', rows);
     return true;
@@ -483,28 +566,51 @@ export async function addTransactionsBatch(
 export async function updateTransaction(
   id: string,
   transaction: Partial<Transaction>,
-  transactions: Transaction[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = transactions.findIndex(t => t.id === id);
-    if (rowIndex === -1) return false;
+    const found = await findRowIndexById(credentials.sheetsId, 'transacoes', id);
+    const existingObj = mapRowToObject(found.headers, found.row);
 
-    const updated = { ...transactions[rowIndex], ...transaction };
-    const row = [
-      updated.id,
-      updated.data,
-      updated.tipo,
-      updated.descricao,
-      updated.valor.toString(),
-      updated.categoria,
-      updated.forma_pagamento,
-      updated.observacao || '',
-      updated.recorrente_id || '',
-      updated.conta_id || '',
-    ];
+    const merged: Transaction = {
+      id,
+      data: String(transaction.data ?? existingObj.data ?? ''),
+      tipo: (transaction.tipo ?? (existingObj.tipo as Transaction['tipo'])) as Transaction['tipo'],
+      descricao: String(transaction.descricao ?? existingObj.descricao ?? ''),
+      valor: transaction.valor !== undefined ? transaction.valor : parseFloat(existingObj.valor || '0') || 0,
+      categoria: String(transaction.categoria ?? existingObj.categoria ?? ''),
+      forma_pagamento: (transaction.forma_pagamento ?? (existingObj.forma_pagamento as Transaction['forma_pagamento'])) as Transaction['forma_pagamento'],
+      observacao: (transaction.observacao ?? existingObj.observacao ?? undefined) as Transaction['observacao'],
+      recorrente_id: (transaction.recorrente_id ?? existingObj.recorrente_id ?? undefined) as Transaction['recorrente_id'],
+      conta_id: (transaction.conta_id ?? existingObj.conta_id ?? undefined) as Transaction['conta_id'],
+      conta_destino_id: (transaction.conta_destino_id ?? existingObj.conta_destino_id ?? undefined) as Transaction['conta_destino_id'],
+      transferencia_id: (transaction.transferencia_id ?? existingObj.transferencia_id ?? undefined) as Transaction['transferencia_id'],
+      confirmado:
+        transaction.confirmado !== undefined
+          ? transaction.confirmado
+          : String(existingObj.confirmado || 'false').toLowerCase() === 'true',
+    };
 
-    await updateSheet(credentials.sheetsId, `transacoes!A${rowIndex + 2}`, [row]);
+    const row = found.headers.map((h) => {
+      switch (h) {
+        case 'id': return merged.id;
+        case 'data': return merged.data;
+        case 'tipo': return merged.tipo;
+        case 'descricao': return merged.descricao;
+        case 'valor': return merged.valor.toString();
+        case 'categoria': return merged.categoria;
+        case 'forma_pagamento': return merged.forma_pagamento;
+        case 'observacao': return merged.observacao || '';
+        case 'recorrente_id': return merged.recorrente_id || '';
+        case 'conta_id': return merged.conta_id || '';
+        case 'conta_destino_id': return merged.conta_destino_id || '';
+        case 'transferencia_id': return merged.transferencia_id || '';
+        case 'confirmado': return (merged.confirmado ?? false).toString();
+        default: return existingObj[h] ?? '';
+      }
+    });
+
+    await updateSheet(credentials.sheetsId, `transacoes!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     console.error('Error updating transaction:', error);
@@ -515,14 +621,11 @@ export async function updateTransaction(
 // Delete transaction
 export async function deleteTransaction(
   id: string,
-  transactions: Transaction[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = transactions.findIndex(t => t.id === id);
-    if (rowIndex === -1) return false;
-
-    await deleteRow(credentials.sheetsId, 'transacoes', rowIndex);
+    const found = await findRowIndexById(credentials.sheetsId, 'transacoes', id);
+    await deleteRow(credentials.sheetsId, 'transacoes', found.rowIndex0);
     return true;
   } catch (error) {
     console.error('Error deleting transaction:', error);
@@ -533,12 +636,24 @@ export async function deleteTransaction(
 // Fetch categories
 export async function fetchCategories(credentials: GoogleSheetsConfig): Promise<Category[]> {
   try {
+    // Garantir que a coluna "tipo" exista mesmo em planilhas antigas
+    try {
+      const values = await readSheetValues(credentials.sheetsId, 'categorias');
+      const headers = values[0] || [];
+      if (headers.length > 0 && !headers.includes('tipo')) {
+        await updateSheet(credentials.sheetsId, 'categorias!A1', [[...headers, 'tipo']]);
+      }
+    } catch (e) {
+      console.warn('Could not migrate categorias header inside fetchCategories:', e);
+    }
+
     const data = await readSheet(credentials.sheetsId, 'categorias');
     
     return data.map(row => ({
       id: String(row.id || ''),
       nome: String(row.nome || ''),
       cor: String(row.cor || ''),
+      tipo: (String(row.tipo || '') as Category['tipo']) || 'Despesa',
     }));
   } catch (error) {
     console.error('Error fetching categories:', error);
@@ -553,9 +668,10 @@ export async function addCategory(
 ): Promise<boolean> {
   try {
     const categoryData = [
-      Date.now().toString(),
+      generateId(),
       category.nome,
       category.cor,
+      category.tipo,
     ];
 
     await appendToSheet(credentials.sheetsId, 'categorias!A2', [categoryData]);
@@ -570,21 +686,30 @@ export async function addCategory(
 export async function updateCategory(
   id: string,
   category: Partial<Category>,
-  categories: Category[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = categories.findIndex(c => c.id === id);
-    if (rowIndex === -1) return false;
+    const found = await findRowIndexById(credentials.sheetsId, 'categorias', id);
+    const existingObj = mapRowToObject(found.headers, found.row);
 
-    const updated = { ...categories[rowIndex], ...category };
-    const row = [
-      updated.id,
-      updated.nome,
-      updated.cor,
-    ];
+    const merged: Category = {
+      id,
+      nome: String(category.nome ?? existingObj.nome ?? ''),
+      cor: String(category.cor ?? existingObj.cor ?? ''),
+      tipo: ((category.tipo ?? existingObj.tipo) as Category['tipo']) || 'Despesa',
+    };
 
-    await updateSheet(credentials.sheetsId, `categorias!A${rowIndex + 2}`, [row]);
+    const row = found.headers.map((h) => {
+      switch (h) {
+        case 'id': return merged.id;
+        case 'nome': return merged.nome;
+        case 'cor': return merged.cor;
+        case 'tipo': return merged.tipo;
+        default: return existingObj[h] ?? '';
+      }
+    });
+
+    await updateSheet(credentials.sheetsId, `categorias!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     console.error('Error updating category:', error);
@@ -595,14 +720,11 @@ export async function updateCategory(
 // Delete category
 export async function deleteCategory(
   id: string,
-  categories: Category[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = categories.findIndex(c => c.id === id);
-    if (rowIndex === -1) return false;
-
-    await deleteRow(credentials.sheetsId, 'categorias', rowIndex);
+    const found = await findRowIndexById(credentials.sheetsId, 'categorias', id);
+    await deleteRow(credentials.sheetsId, 'categorias', found.rowIndex0);
     return true;
   } catch (error) {
     console.error('Error deleting category:', error);
@@ -663,7 +785,7 @@ export async function addGoal(
 ): Promise<boolean> {
   try {
     const goalData = [
-      Date.now().toString(),
+      generateId(),
       goal.nome,
       goal.valor_alvo.toString(),
       goal.valor_atual.toString(),
@@ -683,24 +805,34 @@ export async function addGoal(
 export async function updateGoal(
   id: string,
   goal: Partial<Goal>,
-  goals: Goal[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = goals.findIndex(g => g.id === id);
-    if (rowIndex === -1) return false;
+    const found = await findRowIndexById(credentials.sheetsId, 'metas', id);
+    const existingObj = mapRowToObject(found.headers, found.row);
 
-    const updated = { ...goals[rowIndex], ...goal };
-    const row = [
-      updated.id,
-      updated.nome,
-      updated.valor_alvo.toString(),
-      updated.valor_atual.toString(),
-      updated.prazo,
-      updated.cor,
-    ];
+    const merged: Goal = {
+      id,
+      nome: String(goal.nome ?? existingObj.nome ?? ''),
+      valor_alvo: goal.valor_alvo !== undefined ? goal.valor_alvo : parseFloat(existingObj.valor_alvo || '0') || 0,
+      valor_atual: goal.valor_atual !== undefined ? goal.valor_atual : parseFloat(existingObj.valor_atual || '0') || 0,
+      prazo: String(goal.prazo ?? existingObj.prazo ?? ''),
+      cor: String(goal.cor ?? existingObj.cor ?? ''),
+    };
 
-    await updateSheet(credentials.sheetsId, `metas!A${rowIndex + 2}`, [row]);
+    const row = found.headers.map((h) => {
+      switch (h) {
+        case 'id': return merged.id;
+        case 'nome': return merged.nome;
+        case 'valor_alvo': return merged.valor_alvo.toString();
+        case 'valor_atual': return merged.valor_atual.toString();
+        case 'prazo': return merged.prazo;
+        case 'cor': return merged.cor;
+        default: return existingObj[h] ?? '';
+      }
+    });
+
+    await updateSheet(credentials.sheetsId, `metas!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     console.error('Error updating goal:', error);
@@ -711,14 +843,11 @@ export async function updateGoal(
 // Delete goal
 export async function deleteGoal(
   id: string,
-  goals: Goal[],
   credentials: GoogleSheetsConfig
 ): Promise<boolean> {
   try {
-    const rowIndex = goals.findIndex(g => g.id === id);
-    if (rowIndex === -1) return false;
-
-    await deleteRow(credentials.sheetsId, 'metas', rowIndex);
+    const found = await findRowIndexById(credentials.sheetsId, 'metas', id);
+    await deleteRow(credentials.sheetsId, 'metas', found.rowIndex0);
     return true;
   } catch (error) {
     console.error('Error deleting goal:', error);
@@ -764,7 +893,7 @@ export async function addGoalTransaction(
 ): Promise<boolean> {
   try {
     const transactionData = [
-      Date.now().toString(),
+      generateId(),
       transaction.goal_id,
       transaction.tipo,
       transaction.valor.toString(),
@@ -880,7 +1009,7 @@ export async function addRecurringTransaction(
 ): Promise<boolean> {
   try {
     const transactionData = [
-      Date.now().toString(),
+      generateId(),
       transaction.descricao,
       transaction.tipo,
       transaction.valor.toString(),
@@ -1131,7 +1260,7 @@ export async function addBill(
 ): Promise<boolean> {
   try {
     const billData = [
-      Date.now().toString(),
+      generateId(),
       bill.tipo,
       bill.descricao,
       bill.valor.toString(),
@@ -1235,7 +1364,7 @@ export async function fetchBudgets(credentials: GoogleSheetsConfig): Promise<Bud
 
 export async function addBudget(budget: Omit<Budget, 'id'>, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const row = [Date.now().toString(), budget.categoria, budget.valor_limite.toString(), budget.mes || ''];
+    const row = [generateId(), budget.categoria, budget.valor_limite.toString(), budget.mes || ''];
     await appendToSheet(credentials.sheetsId, 'orcamentos!A2', [row]);
     return true;
   } catch (error) {
@@ -1244,13 +1373,29 @@ export async function addBudget(budget: Omit<Budget, 'id'>, credentials: GoogleS
   }
 }
 
-export async function updateBudget(id: string, budget: Partial<Budget>, budgets: Budget[], credentials: GoogleSheetsConfig): Promise<boolean> {
+export async function updateBudget(id: string, budget: Partial<Budget>, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const rowIndex = budgets.findIndex(b => b.id === id);
-    if (rowIndex === -1) return false;
-    const updated = { ...budgets[rowIndex], ...budget };
-    const row = [updated.id, updated.categoria, updated.valor_limite.toString(), updated.mes || ''];
-    await updateSheet(credentials.sheetsId, `orcamentos!A${rowIndex + 2}`, [row]);
+    const found = await findRowIndexById(credentials.sheetsId, 'orcamentos', id);
+    const existingObj = mapRowToObject(found.headers, found.row);
+
+    const merged: Budget = {
+      id,
+      categoria: String(budget.categoria ?? existingObj.categoria ?? ''),
+      valor_limite: budget.valor_limite !== undefined ? budget.valor_limite : parseFloat(existingObj.valor_limite || '0') || 0,
+      mes: String(budget.mes ?? existingObj.mes ?? ''),
+    };
+
+    const row = found.headers.map((h) => {
+      switch (h) {
+        case 'id': return merged.id;
+        case 'categoria': return merged.categoria;
+        case 'valor_limite': return merged.valor_limite.toString();
+        case 'mes': return merged.mes || '';
+        default: return existingObj[h] ?? '';
+      }
+    });
+
+    await updateSheet(credentials.sheetsId, `orcamentos!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     console.error('Error updating budget:', error);
@@ -1258,11 +1403,10 @@ export async function updateBudget(id: string, budget: Partial<Budget>, budgets:
   }
 }
 
-export async function deleteBudget(id: string, budgets: Budget[], credentials: GoogleSheetsConfig): Promise<boolean> {
+export async function deleteBudget(id: string, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const rowIndex = budgets.findIndex(b => b.id === id);
-    if (rowIndex === -1) return false;
-    await deleteRow(credentials.sheetsId, 'orcamentos', rowIndex);
+    const found = await findRowIndexById(credentials.sheetsId, 'orcamentos', id);
+    await deleteRow(credentials.sheetsId, 'orcamentos', found.rowIndex0);
     return true;
   } catch (error) {
     console.error('Error deleting budget:', error);
@@ -1292,7 +1436,7 @@ export async function fetchBankAccounts(credentials: GoogleSheetsConfig): Promis
 
 export async function addBankAccount(account: Omit<BankAccount, 'id'>, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const row = [Date.now().toString(), account.nome, account.tipo, account.banco || '', account.saldo_inicial.toString(), account.cor, account.ativo.toString()];
+    const row = [generateId(), account.nome, account.tipo, account.banco || '', account.saldo_inicial.toString(), account.cor, account.ativo.toString()];
     await appendToSheet(credentials.sheetsId, 'contas_bancarias!A2', [row]);
     return true;
   } catch (error) {
@@ -1301,13 +1445,35 @@ export async function addBankAccount(account: Omit<BankAccount, 'id'>, credentia
   }
 }
 
-export async function updateBankAccount(id: string, account: Partial<BankAccount>, accounts: BankAccount[], credentials: GoogleSheetsConfig): Promise<boolean> {
+export async function updateBankAccount(id: string, account: Partial<BankAccount>, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const rowIndex = accounts.findIndex(a => a.id === id);
-    if (rowIndex === -1) return false;
-    const updated = { ...accounts[rowIndex], ...account };
-    const row = [updated.id, updated.nome, updated.tipo, updated.banco || '', updated.saldo_inicial.toString(), updated.cor, updated.ativo.toString()];
-    await updateSheet(credentials.sheetsId, `contas_bancarias!A${rowIndex + 2}`, [row]);
+    const found = await findRowIndexById(credentials.sheetsId, 'contas_bancarias', id);
+    const existingObj = mapRowToObject(found.headers, found.row);
+
+    const merged: BankAccount = {
+      id,
+      nome: String(account.nome ?? existingObj.nome ?? ''),
+      tipo: ((account.tipo ?? existingObj.tipo) as BankAccount['tipo']) || 'corrente',
+      banco: String(account.banco ?? existingObj.banco ?? ''),
+      saldo_inicial: account.saldo_inicial !== undefined ? account.saldo_inicial : parseFloat(existingObj.saldo_inicial || '0') || 0,
+      cor: String(account.cor ?? existingObj.cor ?? '#7c3aed'),
+      ativo: account.ativo !== undefined ? account.ativo : String(existingObj.ativo || 'true').toLowerCase() === 'true',
+    };
+
+    const row = found.headers.map((h) => {
+      switch (h) {
+        case 'id': return merged.id;
+        case 'nome': return merged.nome;
+        case 'tipo': return merged.tipo;
+        case 'banco': return merged.banco || '';
+        case 'saldo_inicial': return merged.saldo_inicial.toString();
+        case 'cor': return merged.cor;
+        case 'ativo': return merged.ativo.toString();
+        default: return existingObj[h] ?? '';
+      }
+    });
+
+    await updateSheet(credentials.sheetsId, `contas_bancarias!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     console.error('Error updating bank account:', error);
@@ -1315,11 +1481,10 @@ export async function updateBankAccount(id: string, account: Partial<BankAccount
   }
 }
 
-export async function deleteBankAccount(id: string, accounts: BankAccount[], credentials: GoogleSheetsConfig): Promise<boolean> {
+export async function deleteBankAccount(id: string, credentials: GoogleSheetsConfig): Promise<boolean> {
   try {
-    const rowIndex = accounts.findIndex(a => a.id === id);
-    if (rowIndex === -1) return false;
-    await deleteRow(credentials.sheetsId, 'contas_bancarias', rowIndex);
+    const found = await findRowIndexById(credentials.sheetsId, 'contas_bancarias', id);
+    await deleteRow(credentials.sheetsId, 'contas_bancarias', found.rowIndex0);
     return true;
   } catch (error) {
     console.error('Error deleting bank account:', error);

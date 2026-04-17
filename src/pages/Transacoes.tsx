@@ -108,6 +108,12 @@ const Transacoes = () => {
                       Despesas
                     </span>
                   </SelectItem>
+                  <SelectItem value="Transferência">
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-sky-500" />
+                      Transferências
+                    </span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
 

@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { Category } from '@/types/finance';
 import { cn } from '@/lib/utils';
@@ -27,6 +28,7 @@ import { toast } from 'sonner';
 const formSchema = z.object({
   nome: z.string().min(1, 'Nome é obrigatório').max(50, 'Máximo 50 caracteres'),
   cor: z.string().min(1, 'Selecione uma cor'),
+  tipo: z.enum(['Receita', 'Despesa', 'Ambos']),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -49,13 +51,13 @@ export function CategoryForm({ open, onOpenChange, category }: CategoryFormProps
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: category
-      ? { nome: category.nome, cor: category.cor }
-      : { nome: '', cor: colorOptions[0] },
+      ? { nome: category.nome, cor: category.cor, tipo: category.tipo ?? 'Despesa' }
+      : { nome: '', cor: colorOptions[0], tipo: 'Despesa' },
   });
 
   const onSubmit = async (data: FormData) => {
     let success: boolean;
-    const categoryData = { nome: data.nome, cor: data.cor };
+    const categoryData = { nome: data.nome, cor: data.cor, tipo: data.tipo };
     if (category) {
       success = await updateCategory(category.id, categoryData);
       if (success) {
@@ -127,6 +129,29 @@ export function CategoryForm({ open, onOpenChange, category }: CategoryFormProps
                         />
                       ))}
                     </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="tipo"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Tipo</FormLabel>
+                  <FormControl>
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger className="h-10">
+                        <SelectValue placeholder="Selecione" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Despesa">Despesa</SelectItem>
+                        <SelectItem value="Receita">Receita (faturamento/entradas)</SelectItem>
+                        <SelectItem value="Ambos">Ambos</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
   interface Window {
     google: any;
@@ -6,7 +7,6 @@ declare global {
 
 export interface GoogleAuthData {
   email: string;
-  idToken: string;
   accessToken: string;
   expireAt: number;
 }
@@ -15,6 +15,26 @@ const CLIENT_ID = '992015110192-5gu30mqmin256cpvdl9tdb4e6p8vonvr.apps.googleuser
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly';
 const AUTH_DATA_KEY = 'google_auth_data';
 const STORED_EMAIL_KEY = 'google_user_email';
+const AUTH_CHANNEL = 'financeflow_auth';
+
+// Prefer less persistent storage for access tokens.
+// Keep email hint in localStorage to enable silent refresh across sessions.
+const authStorage: Storage = sessionStorage;
+
+type AuthBroadcastMessage =
+  | { type: 'signed_in'; authData: GoogleAuthData }
+  | { type: 'signed_out' }
+  | { type: 'updated'; authData: GoogleAuthData };
+
+function broadcast(message: AuthBroadcastMessage) {
+  try {
+    const channel = new BroadcastChannel(AUTH_CHANNEL);
+    channel.postMessage(message);
+    channel.close();
+  } catch {
+    // Ignore if BroadcastChannel is not available
+  }
+}
 
 // Initialize Google Identity Services
 export async function initializeGoogleAPI(): Promise<void> {
@@ -68,7 +88,6 @@ export function loginWithGoogle(): Promise<GoogleAuthData> {
 
           const authData: GoogleAuthData = {
             email: userInfo.email || '',
-            idToken: response.access_token,
             accessToken: response.access_token,
             expireAt,
           };
@@ -80,7 +99,6 @@ export function loginWithGoogle(): Promise<GoogleAuthData> {
 
           resolve({
             email: '',
-            idToken: response.access_token,
             accessToken: response.access_token,
             expireAt,
           });
@@ -129,14 +147,12 @@ export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
 
           resolve({
             email: userInfo.email || loginHint,
-            idToken: response.access_token,
             accessToken: response.access_token,
             expireAt,
           });
         } catch {
           resolve({
             email: loginHint,
-            idToken: response.access_token,
             accessToken: response.access_token,
             expireAt,
           });
@@ -153,7 +169,7 @@ export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
 // If expired, tries silent refresh using stored email.
 // Throws if not authenticated — does NOT open popups.
 export async function getValidToken(): Promise<string> {
-  const stored = localStorage.getItem(AUTH_DATA_KEY);
+  const stored = authStorage.getItem(AUTH_DATA_KEY);
 
   if (stored) {
     try {
@@ -187,15 +203,16 @@ export async function getValidToken(): Promise<string> {
 
 // Save auth data to localStorage (also persists email for silent refresh)
 export function saveAuthData(authData: GoogleAuthData): void {
-  localStorage.setItem(AUTH_DATA_KEY, JSON.stringify(authData));
+  authStorage.setItem(AUTH_DATA_KEY, JSON.stringify(authData));
   if (authData.email) {
     localStorage.setItem(STORED_EMAIL_KEY, authData.email);
   }
+  broadcast({ type: 'updated', authData });
 }
 
 // Get auth data from localStorage
 export function getAuthData(): GoogleAuthData | null {
-  const stored = localStorage.getItem(AUTH_DATA_KEY);
+  const stored = authStorage.getItem(AUTH_DATA_KEY);
   if (!stored) return null;
   try {
     return JSON.parse(stored) as GoogleAuthData;
@@ -211,8 +228,9 @@ export function getStoredEmail(): string | null {
 
 // Clear auth token (keeps email so silent refresh can be attempted next time)
 export function clearAuthData(): void {
-  localStorage.removeItem(AUTH_DATA_KEY);
+  authStorage.removeItem(AUTH_DATA_KEY);
   // Intentionally keep STORED_EMAIL_KEY so silent refresh can be attempted on next visit
+  broadcast({ type: 'signed_out' });
 }
 
 // Check if the current stored token is still valid
@@ -222,4 +240,14 @@ export function isAuthenticated(): boolean {
   const now = Date.now();
   const buffer = 5 * 60 * 1000;
   return authData.expireAt > now + buffer;
+}
+
+export function subscribeToAuthChanges(onMessage: (msg: AuthBroadcastMessage) => void): () => void {
+  try {
+    const channel = new BroadcastChannel(AUTH_CHANNEL);
+    channel.onmessage = (ev) => onMessage(ev.data as AuthBroadcastMessage);
+    return () => channel.close();
+  } catch {
+    return () => {};
+  }
 }

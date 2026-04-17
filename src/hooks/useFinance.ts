@@ -1,8 +1,9 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { Transaction, Category, Goal, TransactionFilters, GoalTransaction, BalanceData, RecurringTransaction, ForecastTransaction, Bill, Budget, BankAccount } from '@/types/finance';
-import { getMonthlyData, getCategoryData, getBalanceData, getRecurringOccurrences } from '@/data/mockData';
+import { getMonthlyData, getCategoryData, getBalanceData, getRecurringOccurrences, getRecurringTotalsInRange } from '@/data/mockData';
 import * as sheetsService from '@/services/googleSheets';
 import { useGoogleSheetsConfig } from './useGoogleSheetsConfig';
+import { loadFinanceSnapshot, saveFinanceSnapshot } from '@/services/offlineSnapshot';
 
 // ── Dashboard Period ──────────────────────────────────────────────────────────
 
@@ -13,6 +14,8 @@ export interface DashboardPeriod {
   start: string; // YYYY-MM-DD
   end: string;   // YYYY-MM-DD
 }
+
+export type DashboardView = 'realizado' | 'previsto';
 
 function fmtDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -49,14 +52,14 @@ export function getPresetPeriod(preset: Exclude<DashboardPreset, 'custom'>): Das
 // ─────────────────────────────────────────────────────────────────────────────
 
 const defaultCategories: Category[] = [
-  { id: '1', nome: 'Alimentação', cor: '#a78bfa' },
-  { id: '2', nome: 'Moradia', cor: '#c084fc' },
-  { id: '3', nome: 'Transporte', cor: '#818cf8' },
-  { id: '4', nome: 'Educação', cor: '#8b5cf6' },
-  { id: '5', nome: 'Saúde', cor: '#737373' },
-  { id: '6', nome: 'Lazer', cor: '#a855f7' },
-  { id: '7', nome: 'Investimentos', cor: '#22c55e' },
-  { id: '8', nome: 'Outros', cor: '#6b7280' },
+  { id: '1', nome: 'Alimentação', cor: '#a78bfa', tipo: 'Despesa' },
+  { id: '2', nome: 'Moradia', cor: '#c084fc', tipo: 'Despesa' },
+  { id: '3', nome: 'Transporte', cor: '#818cf8', tipo: 'Despesa' },
+  { id: '4', nome: 'Educação', cor: '#8b5cf6', tipo: 'Despesa' },
+  { id: '5', nome: 'Saúde', cor: '#737373', tipo: 'Despesa' },
+  { id: '6', nome: 'Lazer', cor: '#a855f7', tipo: 'Despesa' },
+  { id: '7', nome: 'Investimentos', cor: '#22c55e', tipo: 'Despesa' },
+  { id: '8', nome: 'Outros', cor: '#6b7280', tipo: 'Ambos' },
 ];
 
 const MAX_AUTO_CONNECT_ATTEMPTS = 3;
@@ -95,9 +98,12 @@ export function useFinance(isSignedIn = false) {
   const [isLoading, setIsLoading] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [hasOfflineSnapshot, setHasOfflineSnapshot] = useState(false);
+  const [offlineSnapshotUpdatedAt, setOfflineSnapshotUpdatedAt] = useState<string | null>(null);
   const [dashboardPeriod, setDashboardPeriodState] = useState<DashboardPeriod>(
     () => getPresetPeriod('month')
   );
+  const [dashboardView, setDashboardView] = useState<DashboardView>('realizado');
   const setDashboardPeriod = useCallback((period: DashboardPeriod) => {
     setDashboardPeriodState(period);
   }, []);
@@ -194,12 +200,67 @@ export function useFinance(isSignedIn = false) {
         }
       }
       setGoalTransactions(allGoalTransactions);
+
+      // Persist offline snapshot (best-effort)
+      try {
+        const snapshot = {
+          version: 1 as const,
+          sheetsId: config.sheetsId,
+          updatedAt: new Date().toISOString(),
+          data: {
+            transactions: finalTransactions,
+            categories: categoriesData.length > 0 ? categoriesData : defaultCategories,
+            goals: goalsData,
+            goalTransactions: allGoalTransactions,
+            recurringTransactions: recurringData,
+            bills: billsData,
+            budgets: budgetsData,
+            bankAccounts: bankAccountsData,
+          },
+        };
+        await saveFinanceSnapshot(snapshot);
+        setHasOfflineSnapshot(true);
+        setOfflineSnapshotUpdatedAt(snapshot.updatedAt);
+      } catch (e) {
+        console.warn('Could not save offline snapshot:', e);
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
       setIsLoading(false);
     }
   }, [isConnected, config, isValid]);
+
+  // Load last snapshot for offline read-only mode
+  useEffect(() => {
+    if (isConnected) return;
+    const sheetsId = config?.sheetsId;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await loadFinanceSnapshot(sheetsId);
+        if (!snap || cancelled) return;
+
+        setTransactions(snap.data.transactions || []);
+        if ((snap.data.categories || []).length > 0) setCategories(snap.data.categories);
+        setGoals(snap.data.goals || []);
+        setGoalTransactions(snap.data.goalTransactions || []);
+        setRecurringTransactions(snap.data.recurringTransactions || []);
+        setBills(snap.data.bills || []);
+        setBudgets(snap.data.budgets || []);
+        setBankAccounts(snap.data.bankAccounts || []);
+        setHasOfflineSnapshot(true);
+        setOfflineSnapshotUpdatedAt(snap.updatedAt);
+      } catch (e) {
+        console.warn('Could not load offline snapshot:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, config?.sheetsId]);
 
   useEffect(() => {
     if (isConnected) {
@@ -297,7 +358,7 @@ export function useFinance(isSignedIn = false) {
   }, [config, isValid, isConnected, isInitializing, isSignedIn, connectToSheets]);
 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>): Promise<boolean> => {
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${crypto.randomUUID()}`;
     setTransactions((prev) => [{ ...transaction, id: tempId }, ...prev]);
     setIsLoading(true);
     try {
@@ -327,7 +388,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.updateTransaction(id, transaction, snapshot, config);
+        const success = await sheetsService.updateTransaction(id, transaction, config);
         if (!success) {
           setTransactions(snapshot);
           return false;
@@ -344,7 +405,7 @@ export function useFinance(isSignedIn = false) {
     }
   }, [transactions, isConnected, config, isValid]);
 
-  const deleteTransaction = useCallback(async (id: string) => {
+  const deleteTransaction = useCallback(async (id: string): Promise<boolean> => {
     const snapshot = transactions;
     const tx = snapshot.find((t) => t.id === id);
     if (tx?.recorrente_id) {
@@ -354,18 +415,20 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.deleteTransaction(id, snapshot, config);
-        if (!success) {
-          setTransactions(snapshot);
-        }
+        const success = await sheetsService.deleteTransaction(id, config);
+        if (!success) { setTransactions(snapshot); return false; }
+        return true;
       }
+      // Offline mode: keep local-only delete, but report as "not persisted"
+      setTransactions(snapshot);
+      return false;
     } finally {
       setIsLoading(false);
     }
   }, [transactions, isConnected, config, isValid]);
 
   const addCategory = useCallback(async (category: Omit<Category, 'id'>) => {
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${crypto.randomUUID()}`;
     setCategories((prev) => [...prev, { ...category, id: tempId }]);
     setIsLoading(true);
     try {
@@ -391,7 +454,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.updateCategory(id, category, snapshot, config);
+        const success = await sheetsService.updateCategory(id, category, config);
         if (!success) { setCategories(snapshot); return false; }
         return true;
       }
@@ -407,7 +470,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.deleteCategory(id, snapshot, config);
+        const success = await sheetsService.deleteCategory(id, config);
         if (!success) { setCategories(snapshot); return false; }
         return true;
       }
@@ -429,7 +492,7 @@ export function useFinance(isSignedIn = false) {
       } else {
         const newGoal: Goal = {
           ...goal,
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
         };
         setGoals((prev) => [...prev, newGoal]);
         return true;
@@ -443,7 +506,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.updateGoal(id, goal, goals, config);
+        const success = await sheetsService.updateGoal(id, goal, config);
         if (success) {
           await loadData();
         }
@@ -463,7 +526,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (isConnected && config && isValid) {
-        const success = await sheetsService.deleteGoal(id, goals, config);
+        const success = await sheetsService.deleteGoal(id, config);
         if (success) {
           await loadData();
         }
@@ -500,7 +563,7 @@ export function useFinance(isSignedIn = false) {
           // Add to local state immediately
           const newTransaction: GoalTransaction = {
             ...transaction,
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
           };
           setGoalTransactions((prev) => [...prev, newTransaction]);
           await loadData(); // Reload to get updated goal values
@@ -598,20 +661,46 @@ export function useFinance(isSignedIn = false) {
   const stats = useMemo(() => {
     const { start, end } = dashboardPeriod;
 
-    // ── Period totals from transactions ─────────────────────────────────────
-    const periodTxs = transactions.filter((t) => t.data >= start && t.data <= end);
+    // Realizado: transações + contas pagas no período (por data_pagamento)
+    if (dashboardView === 'realizado') {
+      const periodTxs = transactions.filter((t) => t.data >= start && t.data <= end);
 
-    let receitasMes = periodTxs
-      .filter((t) => t.tipo === 'Receita')
-      .reduce((sum, t) => sum + t.valor, 0);
+      let receitasMes = periodTxs
+        .filter((t) => t.tipo === 'Receita')
+        .reduce((sum, t) => sum + t.valor, 0);
 
-    let despesasMes = periodTxs
-      .filter((t) => t.tipo === 'Despesa')
-      .reduce((sum, t) => sum + t.valor, 0);
+      let despesasMes = periodTxs
+        .filter((t) => t.tipo === 'Despesa')
+        .reduce((sum, t) => sum + t.valor, 0);
 
-    // ── Paid bills within period ─────────────────────────────────────────────
-    paidBills
-      .filter((b) => b.data_pagamento && b.data_pagamento >= start && b.data_pagamento <= end)
+      paidBills
+        .filter((b) => b.data_pagamento && b.data_pagamento >= start && b.data_pagamento <= end)
+        .forEach((b) => {
+          if (b.tipo === 'pagar') despesasMes += b.valor;
+          else if (b.tipo === 'receber') receitasMes += b.valor;
+        });
+
+      return {
+        totalReceitas: receitasMes,
+        totalDespesas: despesasMes,
+        saldo: receitasMes - despesasMes,
+        receitasMes,
+        despesasMes,
+        saldoMes: receitasMes - despesasMes,
+      };
+    }
+
+    // Previsto: recorrências + contas por vencimento (independente de pago)
+    const recurringTotals = getRecurringTotalsInRange(recurringTransactions, start, end);
+
+    let receitasMes = recurringTotals.receitas;
+    let despesasMes = recurringTotals.despesas;
+
+    bills
+      .filter((b) => {
+        const d = b.data_vencimento || b.data_pagamento;
+        return !!d && d >= start && d <= end;
+      })
       .forEach((b) => {
         if (b.tipo === 'pagar') despesasMes += b.valor;
         else if (b.tipo === 'receber') receitasMes += b.valor;
@@ -625,27 +714,39 @@ export function useFinance(isSignedIn = false) {
       despesasMes,
       saldoMes: receitasMes - despesasMes,
     };
-  }, [transactions, paidBills, dashboardPeriod]);
+  }, [transactions, paidBills, recurringTransactions, bills, dashboardPeriod, dashboardView]);
 
-  const monthlyData = useMemo(
-    () => getMonthlyData(transactions, paidBills, [], dashboardPeriod),
-    [transactions, paidBills, dashboardPeriod]
-  );
-  const categoryData = useMemo(
-    () => getCategoryData(transactions, categories, paidBills, [], dashboardPeriod),
-    [transactions, categories, paidBills, dashboardPeriod]
-  );
-  const balanceData = useMemo(() => getBalanceData(transactions, goalTransactions, undefined, undefined, bills), [transactions, goalTransactions, bills]);
-  
+  const monthlyData = useMemo(() => {
+    if (dashboardView === 'realizado') {
+      return getMonthlyData(transactions, paidBills, [], dashboardPeriod);
+    }
+    return getMonthlyData([], bills, recurringTransactions, dashboardPeriod);
+  }, [transactions, paidBills, bills, recurringTransactions, dashboardPeriod, dashboardView]);
+
+  const categoryData = useMemo(() => {
+    if (dashboardView === 'realizado') {
+      return getCategoryData(transactions, categories, paidBills, [], dashboardPeriod);
+    }
+    return getCategoryData([], categories, bills, recurringTransactions, dashboardPeriod);
+  }, [transactions, categories, paidBills, bills, recurringTransactions, dashboardPeriod, dashboardView]);
+
   // Generate forecast transactions
   const forecastTransactions = useMemo(() => {
     // Generate forecasts for 24 months ahead to support longer period selections
     return sheetsService.generateForecastTransactions(recurringTransactions, 24);
   }, [recurringTransactions]);
 
+  const balanceData = useMemo(() => {
+    if (dashboardView === 'realizado') {
+      return getBalanceData(transactions, goalTransactions, undefined, undefined, bills);
+    }
+    // Previsto: usa forecast (futuro) + contas; ignora transações realizadas para não duplicar recorrências materializadas.
+    return getBalanceData([], goalTransactions, undefined, forecastTransactions, bills);
+  }, [transactions, goalTransactions, bills, forecastTransactions, dashboardView]);
+
   // Bills CRUD (optimistic)
   const addBill = useCallback(async (bill: Omit<Bill, 'id'>): Promise<boolean> => {
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${crypto.randomUUID()}`;
     setBills((prev) => [...prev, { ...bill, id: tempId }]);
     setIsLoading(true);
     try {
@@ -684,7 +785,7 @@ export function useFinance(isSignedIn = false) {
 
   // Budget CRUD (optimistic)
   const addBudget = useCallback(async (budget: Omit<Budget, 'id'>): Promise<boolean> => {
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${crypto.randomUUID()}`;
     setBudgets((prev) => [...prev, { ...budget, id: tempId }]);
     setIsLoading(true);
     try {
@@ -703,7 +804,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (!isConnected || !config || !isValid) return true;
-      const success = await sheetsService.updateBudget(id, budget, snapshot, config);
+      const success = await sheetsService.updateBudget(id, budget, config);
       if (!success) { setBudgets(snapshot); return false; }
       return true;
     } finally { setIsLoading(false); }
@@ -715,7 +816,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (!isConnected || !config || !isValid) return true;
-      const success = await sheetsService.deleteBudget(id, snapshot, config);
+      const success = await sheetsService.deleteBudget(id, config);
       if (!success) { setBudgets(snapshot); return false; }
       return true;
     } finally { setIsLoading(false); }
@@ -723,7 +824,7 @@ export function useFinance(isSignedIn = false) {
 
   // Bank Accounts CRUD (optimistic)
   const addBankAccount = useCallback(async (account: Omit<BankAccount, 'id'>): Promise<boolean> => {
-    const tempId = `temp_${Date.now()}`;
+    const tempId = `temp_${crypto.randomUUID()}`;
     setBankAccounts((prev) => [...prev, { ...account, id: tempId }]);
     setIsLoading(true);
     try {
@@ -742,7 +843,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (!isConnected || !config || !isValid) return true;
-      const success = await sheetsService.updateBankAccount(id, account, snapshot, config);
+      const success = await sheetsService.updateBankAccount(id, account, config);
       if (!success) { setBankAccounts(snapshot); return false; }
       return true;
     } finally { setIsLoading(false); }
@@ -754,7 +855,7 @@ export function useFinance(isSignedIn = false) {
     setIsLoading(true);
     try {
       if (!isConnected || !config || !isValid) return true;
-      const success = await sheetsService.deleteBankAccount(id, snapshot, config);
+      const success = await sheetsService.deleteBankAccount(id, config);
       if (!success) { setBankAccounts(snapshot); return false; }
       return true;
     } finally { setIsLoading(false); }
@@ -839,12 +940,16 @@ export function useFinance(isSignedIn = false) {
     isInitializing,
     connectionError,
     retryConnection,
+    hasOfflineSnapshot,
+    offlineSnapshotUpdatedAt,
     stats,
     monthlyData,
     categoryData,
     balanceData,
     dashboardPeriod,
     setDashboardPeriod,
+    dashboardView,
+    setDashboardView,
     filters,
     setFilters,
     connectToSheets,

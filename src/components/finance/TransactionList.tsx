@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
-  Edit2, Trash2, MoreHorizontal, ArrowUpRight, ArrowDownRight,
+  Edit2, Trash2, MoreHorizontal, ArrowUpRight, ArrowDownRight, ArrowRightLeft,
   CheckSquare, Square, Minus, X, Loader2,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -114,6 +114,12 @@ function BulkEditDialog({ open, onOpenChange, count, onConfirm }: BulkEditDialog
                     Despesa
                   </span>
                 </SelectItem>
+                <SelectItem value="Transferência">
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-sky-500" />
+                    Transferência
+                  </span>
+                </SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -211,7 +217,8 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
   const toggleSelection = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -241,18 +248,21 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
 
   // ── Single delete ──
   const handleDelete = async (id: string) => {
-    await deleteTransaction(id);
+    const ok = await deleteTransaction(id);
     setDeletingId(null);
-    toast.success('Transação excluída.');
+    if (ok) toast.success('Transação excluída.');
+    else toast.error('Não foi possível excluir. Verifique a conexão/permissões no Google Sheets.');
   };
 
   // ── Bulk delete ──
   const handleBulkDelete = async () => {
     setBulkLoading(true);
     try {
-      await Promise.all([...selectedIds].map((id) => deleteTransaction(id)));
-      toast.success(`${selectedCount} transação(ões) excluída(s).`);
-      exitSelectionMode();
+      const results = await Promise.all([...selectedIds].map((id) => deleteTransaction(id)));
+      const okCount = results.filter(Boolean).length;
+      if (okCount > 0) toast.success(`${okCount} transação(ões) excluída(s).`);
+      if (okCount !== selectedCount) toast.error('Algumas exclusões falharam. Verifique conexão/permissões.');
+      if (okCount > 0) exitSelectionMode();
     } catch {
       toast.error('Erro ao excluir transações.');
     } finally {
@@ -374,13 +384,17 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                           'flex h-9 w-9 shrink-0 items-center justify-center rounded-full',
                           transaction.tipo === 'Receita'
                             ? 'bg-emerald-500/10'
-                            : 'bg-rose-500/10'
+                            : transaction.tipo === 'Despesa'
+                              ? 'bg-rose-500/10'
+                              : 'bg-sky-500/10'
                         )}
                       >
                         {transaction.tipo === 'Receita' ? (
                           <ArrowUpRight className="h-4 w-4 text-emerald-600" />
-                        ) : (
+                        ) : transaction.tipo === 'Despesa' ? (
                           <ArrowDownRight className="h-4 w-4 text-rose-600" />
+                        ) : (
+                          <ArrowRightLeft className="h-4 w-4 text-sky-600" />
                         )}
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
@@ -403,6 +417,14 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                           >
                             {transaction.categoria}
                           </Badge>
+                          {transaction.confirmado && (
+                            <>
+                              <span>•</span>
+                              <Badge variant="outline" className="text-xs px-1.5 py-0">
+                                Conciliada
+                              </Badge>
+                            </>
+                          )}
                           <span className="hidden sm:inline">•</span>
                           <span className="hidden sm:inline">{transaction.forma_pagamento}</span>
                         </div>
@@ -414,10 +436,18 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                       <span
                         className={cn(
                           'font-semibold text-sm',
-                          transaction.tipo === 'Receita' ? 'text-emerald-600' : 'text-rose-600'
+                          transaction.tipo === 'Receita'
+                            ? 'text-emerald-600'
+                            : transaction.tipo === 'Despesa'
+                              ? 'text-rose-600'
+                              : 'text-sky-600'
                         )}
                       >
-                        {transaction.tipo === 'Receita' ? '+' : '-'}{' '}
+                        {transaction.tipo === 'Receita'
+                          ? '+'
+                          : transaction.tipo === 'Despesa'
+                            ? '-'
+                            : '↔'}{' '}
                         {formatCurrency(transaction.valor)}
                       </span>
 
@@ -429,6 +459,21 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={async () => {
+                                const next = !transaction.confirmado;
+                                const ok = await updateTransaction(transaction.id, { confirmado: next });
+                                if (ok) toast.success(next ? 'Transação conciliada' : 'Conciliação removida');
+                                else toast.error('Erro ao atualizar conciliação');
+                              }}
+                            >
+                              {transaction.confirmado ? (
+                                <Square className="mr-2 h-4 w-4" />
+                              ) : (
+                                <CheckSquare className="mr-2 h-4 w-4" />
+                              )}
+                              {transaction.confirmado ? 'Remover conciliação' : 'Marcar como conciliada'}
+                            </DropdownMenuItem>
                             <DropdownMenuItem onClick={() => setEditingTransaction(transaction)}>
                               <Edit2 className="mr-2 h-4 w-4" />
                               Editar

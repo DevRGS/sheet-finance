@@ -184,7 +184,7 @@ export function BankAccountForm({ open, onOpenChange, account }: BankAccountForm
                       type="text"
                       placeholder="0,00"
                       {...field}
-                      onChange={(e) => field.onChange(e.target.value.replace(/[^0-9.,\-]/g, ''))}
+                      onChange={(e) => field.onChange(e.target.value.replace(/[^0-9.,-]/g, ''))}
                     />
                   </FormControl>
                   <FormMessage />

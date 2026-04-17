@@ -133,34 +133,22 @@ A aplicação estará disponível em `http://localhost:5173`
 
 ## ⚙️ Configuração
 
-### 1. Configurar Google Cloud Service Account
+### Como funciona (sem servidor, sem APIs pagas)
 
-1. Acesse o [Google Cloud Console](https://console.cloud.google.com/)
-2. Crie um novo projeto ou selecione um existente
-3. Ative a **Google Sheets API**
-4. Vá em **IAM & Admin > Service Accounts**
-5. Crie uma nova Service Account
-6. Baixe a chave JSON da Service Account
-7. Anote o **email da Service Account** e a **chave privada** (private_key)
+Este projeto usa **Google Login (OAuth via Google Identity Services)** no navegador e acessa o **Google Sheets** diretamente (via `gapi`), usando o token do usuário.
 
-### 2. Configurar Google Sheets
+Isso significa que:
+- Você **não** precisa de Service Account nem chave privada.
+- A planilha deve estar **na sua conta Google** (ou compartilhada com o usuário logado).
+- O app pode **listar** suas planilhas e também **criar** uma nova (Drive API), tudo após você autorizar no popup do Google.
 
-1. Crie uma nova planilha no Google Sheets
-2. Compartilhe a planilha com o email da Service Account (permissão de Editor)
-3. Copie o **ID da Planilha** da URL:
-   ```
-   https://docs.google.com/spreadsheets/d/[ID_DA_PLANILHA]/edit
-   ```
+### Passo a passo (primeiro uso)
 
-### 3. Configurar na Aplicação
-
-1. Acesse a página **Configurações** na aplicação
-2. Preencha os campos:
-   - **Email da Service Account**: Email da Service Account criada
-   - **ID da Planilha**: ID copiado da URL da planilha
-   - **Chave Privada**: Private key do arquivo JSON (incluindo BEGIN e END)
-3. Clique em **Salvar Credenciais**
-4. Clique em **Conectar ao Google Sheets**
+1. Rode o projeto e abra a aplicação.
+2. Vá em **Configurações**.
+3. Clique em **Conectar com Google** e autorize o acesso (Sheets + listar planilhas do Drive).
+4. Selecione uma planilha existente **ou** crie uma nova pela própria tela.
+5. Ao selecionar/criar, o app **inicializa automaticamente** as abas necessárias na planilha.
 
 A aplicação criará automaticamente as abas necessárias na planilha:
 - `config` - Configurações do sistema
@@ -170,6 +158,8 @@ A aplicação criará automaticamente as abas necessárias na planilha:
 - `movimentacoes_metas` - Movimentações das metas
 - `transacoes_recorrentes` - Transações recorrentes
 - `contas` - Contas a pagar/receber
+- `orcamentos` - Orçamentos por categoria
+- `contas_bancarias` - Contas bancárias
 
 ## 💻 Uso
 
@@ -303,10 +293,10 @@ Todos os componentes se adaptam automaticamente ao tamanho da tela, proporcionan
 
 ## 🔒 Segurança
 
-- As credenciais do Google Sheets são armazenadas apenas no **localStorage** do navegador
+- O token de autenticação e a configuração da planilha ficam armazenados no navegador (atualmente via **localStorage**)
 - Nenhuma informação sensível é enviada para servidores externos
 - A autenticação é feita diretamente entre o navegador e a Google Sheets API
-- Recomenda-se usar uma Service Account dedicada apenas para este projeto
+- Recomenda-se usar uma conta Google dedicada apenas para este projeto (opcional)
 
 ## 🤝 Contribuindo
 

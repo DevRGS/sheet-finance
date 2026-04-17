@@ -7,6 +7,11 @@ import { MonthlyChart } from '@/components/finance/MonthlyChart';
 import { CategoryChart } from '@/components/finance/CategoryChart';
 import { BalanceChart } from '@/components/finance/BalanceChart';
 import { BillsOverviewChart } from '@/components/finance/BillsOverviewChart';
+import { BalanceWaterfallChart } from '@/components/finance/BalanceWaterfallChart';
+import { DailySpendingHeatmap } from '@/components/finance/DailySpendingHeatmap';
+import { CategoryTrendsChart } from '@/components/finance/CategoryTrendsChart';
+import { BudgetVsActualChart } from '@/components/finance/BudgetVsActualChart';
+import { FixedVsVariableChart } from '@/components/finance/FixedVsVariableChart';
 import { InsightsCard } from '@/components/finance/InsightsCard';
 import { BudgetWidget } from '@/components/finance/BudgetWidget';
 import { RecentTransactions } from '@/components/finance/RecentTransactions';
@@ -20,7 +25,7 @@ import { Link } from 'react-router-dom';
 
 const Index = () => {
   const [formOpen, setFormOpen] = useState(false);
-  const { isConnected, transactions } = useFinanceContext();
+  const { isConnected, transactions, bankAccounts, hasOfflineSnapshot, offlineSnapshotUpdatedAt } = useFinanceContext();
 
   return (
     <AppLayout>
@@ -34,7 +39,9 @@ const Index = () => {
             <AlertTitle className="text-amber-600">Modo offline</AlertTitle>
             <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-sm sm:text-base">
-                Conecte ao Google Sheets para sincronizar seus dados.
+                {hasOfflineSnapshot
+                  ? `Você está vendo um snapshot local${offlineSnapshotUpdatedAt ? ` (salvo em ${new Date(offlineSnapshotUpdatedAt).toLocaleString('pt-BR')})` : ''}.`
+                  : 'Conecte ao Google Sheets para sincronizar seus dados.'}
               </span>
               <Button variant="outline" size="sm" asChild className="w-full sm:w-auto sm:ml-4">
                 <Link to="/configuracoes" className="gap-2">
@@ -42,6 +49,27 @@ const Index = () => {
                   Configurar
                 </Link>
               </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Quick start (connected but empty) */}
+        {isConnected && bankAccounts.length === 0 && transactions.length === 0 && (
+          <Alert className="border-sky-500/40 bg-sky-500/5">
+            <Cloud className="h-4 w-4 text-sky-500" />
+            <AlertTitle>Primeiros passos</AlertTitle>
+            <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-sm sm:text-base">
+                Crie sua primeira conta e registre a primeira transação para começar a ver os gráficos.
+              </span>
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                <Button variant="outline" size="sm" asChild className="w-full sm:w-auto">
+                  <Link to="/contas">Criar conta</Link>
+                </Button>
+                <Button variant="outline" size="sm" asChild className="w-full sm:w-auto">
+                  <Link to="/transacoes">Adicionar transação</Link>
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         )}
@@ -60,6 +88,18 @@ const Index = () => {
         </div>
 
         <BalanceChart />
+
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
+          <BalanceWaterfallChart />
+          <DailySpendingHeatmap />
+        </div>
+
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
+          <CategoryTrendsChart />
+          <FixedVsVariableChart />
+        </div>
+
+        <BudgetVsActualChart />
 
         <div className="grid gap-4 sm:gap-6 lg:grid-cols-2">
           <InsightsCard />

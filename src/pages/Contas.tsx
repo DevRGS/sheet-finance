@@ -44,10 +44,40 @@ export default function Contas() {
       map[a.id] = a.saldo_inicial;
     });
     transactions.forEach((t) => {
-      if (!t.conta_id || !map[t.conta_id] === undefined) return;
+      if (!t.conta_id) return;
       if (map[t.conta_id] === undefined) return;
-      if (t.tipo === 'Receita') map[t.conta_id] += t.valor;
-      else map[t.conta_id] -= t.valor;
+      if (t.tipo === 'Receita') {
+        map[t.conta_id] += t.valor;
+        return;
+      }
+      if (t.tipo === 'Despesa') {
+        map[t.conta_id] -= t.valor;
+        return;
+      }
+      if (t.tipo === 'Transferência') {
+        // origem
+        map[t.conta_id] -= t.valor;
+        // destino (se houver)
+        if (t.conta_destino_id && map[t.conta_destino_id] !== undefined) {
+          map[t.conta_destino_id] += t.valor;
+        }
+      }
+    });
+    return map;
+  }, [bankAccounts, transactions]);
+
+  const cardSpendThisMonth = useMemo(() => {
+    const monthKey = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    const map: Record<string, number> = {};
+    bankAccounts
+      .filter((a) => a.tipo === 'cartao_credito')
+      .forEach((a) => { map[a.id] = 0; });
+
+    transactions.forEach((t) => {
+      if (!t.conta_id || map[t.conta_id] === undefined) return;
+      if (t.tipo !== 'Despesa') return;
+      if (t.data.substring(0, 7) !== monthKey) return;
+      map[t.conta_id] += t.valor;
     });
     return map;
   }, [bankAccounts, transactions]);
@@ -81,6 +111,7 @@ export default function Contas() {
   const AccountCard = ({ account }: { account: BankAccount }) => {
     const balance = balanceByAccount[account.id] ?? account.saldo_inicial;
     const isNegative = balance < 0;
+    const cardSpend = account.tipo === 'cartao_credito' ? (cardSpendThisMonth[account.id] || 0) : null;
 
     return (
       <div className="rounded-xl border bg-card overflow-hidden">
@@ -115,6 +146,16 @@ export default function Contas() {
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Building2 className="h-3 w-3" />
               {account.banco}
+            </div>
+          )}
+
+          {account.tipo === 'cartao_credito' && cardSpend != null && (
+            <div className="rounded-lg border bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">Gastos no mês</p>
+              <p className="text-sm font-semibold">{formatCurrency(cardSpend)}</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Dica: registre o pagamento da fatura como uma <strong>Transferência</strong> para reduzir o saldo do cartão.
+              </p>
             </div>
           )}
 

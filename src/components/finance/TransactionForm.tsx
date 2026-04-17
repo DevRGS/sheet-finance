@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -38,17 +38,37 @@ import { Landmark } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
+/** Valor sentinela para Radix Select (não permite value="") */
+const NO_ACCOUNT_VALUE = '__none__';
+
 const formSchema = z.object({
   data: z.date({ required_error: 'Selecione uma data' }),
-  tipo: z.enum(['Receita', 'Despesa'], { required_error: 'Selecione o tipo' }),
+  tipo: z.enum(['Receita', 'Despesa', 'Transferência'], { required_error: 'Selecione o tipo' }),
   descricao: z.string().min(1, 'Descrição é obrigatória').max(100, 'Máximo 100 caracteres'),
   valor: z.string().min(1, 'Valor é obrigatório'),
-  categoria: z.string().min(1, 'Selecione uma categoria'),
+  categoria: z.string().optional(),
   forma_pagamento: z.enum(['Cartão', 'PIX', 'Dinheiro', 'Transferência', 'Boleto'], {
     required_error: 'Selecione a forma de pagamento',
   }),
   conta_id: z.string().optional(),
+  conta_destino_id: z.string().optional(),
   observacao: z.string().max(200, 'Máximo 200 caracteres').optional(),
+}).superRefine((data, ctx) => {
+  if (data.tipo === 'Transferência') {
+    if (!data.conta_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['conta_id'], message: 'Selecione a conta de origem' });
+    }
+    if (!data.conta_destino_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['conta_destino_id'], message: 'Selecione a conta de destino' });
+    }
+    if (data.conta_id && data.conta_destino_id && data.conta_id === data.conta_destino_id) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['conta_destino_id'], message: 'A conta de destino deve ser diferente da origem' });
+    }
+  } else {
+    if (!data.categoria) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['categoria'], message: 'Selecione uma categoria' });
+    }
+  }
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -60,7 +80,7 @@ interface TransactionFormProps {
 }
 
 export function TransactionForm({ open, onOpenChange, transaction }: TransactionFormProps) {
-  const { categories, bankAccounts, addTransaction, updateTransaction, isLoading } = useFinanceContext();
+  const { categories, bankAccounts, addTransaction, updateTransaction, isLoading, isConnected, hasOfflineSnapshot } = useFinanceContext();
   const [calendarOpen, setCalendarOpen] = useState(false);
 
   const form = useForm<FormData>({
@@ -78,6 +98,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
           categoria: transaction.categoria,
           forma_pagamento: transaction.forma_pagamento,
           conta_id: transaction.conta_id || '',
+          conta_destino_id: transaction.conta_destino_id || '',
           observacao: transaction.observacao || '',
         }
       : {
@@ -87,19 +108,47 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
           categoria: '',
           forma_pagamento: 'PIX',
           conta_id: '',
+          conta_destino_id: '',
           observacao: '',
         },
   });
 
+  const tipoAtual = form.watch('tipo');
+
+  const categoriesForTipo = useMemo(() => {
+    const seen = new Set<string>();
+    return categories.filter((c) => {
+      const nome = (c.nome || '').trim();
+      if (!nome || seen.has(nome)) return false;
+      seen.add(nome);
+      const t = c.tipo ?? 'Despesa';
+      if (tipoAtual === 'Receita') return t === 'Receita' || t === 'Ambos';
+      if (tipoAtual === 'Despesa') return t === 'Despesa' || t === 'Ambos';
+      return true;
+    });
+  }, [categories, tipoAtual]);
+
   const onSubmit = async (data: FormData) => {
+    if (!isConnected) {
+      toast.error(
+        hasOfflineSnapshot
+          ? 'Você está em modo offline (somente leitura). Conecte ao Google Sheets para salvar alterações.'
+          : 'Conecte ao Google Sheets para salvar alterações.'
+      );
+      return;
+    }
+
+    const isTransfer = data.tipo === 'Transferência';
     const transactionData = {
       data: format(data.data, 'yyyy-MM-dd'),
       tipo: data.tipo as TransactionType,
       descricao: data.descricao,
       valor: parseFloat(data.valor.replace(',', '.')),
-      categoria: data.categoria,
-      forma_pagamento: data.forma_pagamento as PaymentMethod,
-      conta_id: data.conta_id || undefined,
+      categoria: isTransfer ? 'Transferência' : (data.categoria || ''),
+      forma_pagamento: (isTransfer ? 'Transferência' : data.forma_pagamento) as PaymentMethod,
+      conta_id: data.conta_id && data.conta_id !== NO_ACCOUNT_VALUE ? data.conta_id : undefined,
+      conta_destino_id: isTransfer ? (data.conta_destino_id || undefined) : undefined,
+      transferencia_id: isTransfer ? crypto.randomUUID() : undefined,
       observacao: data.observacao || '',
     };
 
@@ -152,7 +201,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Tipo</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select value={field.value} onValueChange={field.onChange}>
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Selecione" />
@@ -169,6 +218,12 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
                           <span className="flex items-center gap-2">
                             <span className="h-2 w-2 rounded-full bg-rose-500" />
                             Despesa
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="Transferência">
+                          <span className="flex items-center gap-2">
+                            <span className="h-2 w-2 rounded-full bg-sky-500" />
+                            Transferência
                           </span>
                         </SelectItem>
                       </SelectContent>
@@ -258,30 +313,52 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
                 )}
               />
 
-              <FormField
-                control={form.control}
-                name="categoria"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Categoria</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Selecione" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {categories.map((cat) => (
-                          <SelectItem key={cat.id} value={cat.nome}>
-                            {cat.nome}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {tipoAtual !== 'Transferência' ? (
+                <FormField
+                  control={form.control}
+                  name="categoria"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Categoria</FormLabel>
+                      <Select
+                        value={field.value}
+                        onValueChange={field.onChange}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {(() => {
+                            const current = (field.value || '').trim();
+                            const inList = categoriesForTipo.some((c) => c.nome.trim() === current);
+                            return (
+                              <>
+                                {current && !inList && (
+                                  <SelectItem key="__orphan_cat__" value={current}>
+                                    {current} (fora da lista)
+                                  </SelectItem>
+                                )}
+                                {categoriesForTipo.map((cat) => (
+                                  <SelectItem key={cat.id} value={cat.nome.trim()}>
+                                    {cat.nome.trim()}
+                                  </SelectItem>
+                                ))}
+                              </>
+                            );
+                          })()}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              ) : (
+                <div className="flex items-center rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+                  Categoria: <span className="ml-1 font-medium text-foreground">Transferência</span>
+                </div>
+              )}
             </div>
 
             <FormField
@@ -290,7 +367,7 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Forma de Pagamento</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <Select value={field.value} onValueChange={field.onChange}>
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder="Selecione" />
@@ -310,37 +387,77 @@ export function TransactionForm({ open, onOpenChange, transaction }: Transaction
             />
 
             {bankAccounts.filter((a) => a.ativo).length > 0 && (
-              <FormField
-                control={form.control}
-                name="conta_id"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel className="flex items-center gap-2">
-                      <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
-                      Conta (opcional)
-                    </FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Sem conta vinculada" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="">Sem conta</SelectItem>
-                        {bankAccounts.filter((a) => a.ativo).map((acc) => (
-                          <SelectItem key={acc.id} value={acc.id}>
-                            <span className="flex items-center gap-2">
-                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.cor }} />
-                              {acc.nome}
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
+              <div className={cn('grid gap-4', tipoAtual === 'Transferência' ? 'sm:grid-cols-2' : 'grid-cols-1')}>
+                <FormField
+                  control={form.control}
+                  name="conta_id"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="flex items-center gap-2">
+                        <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
+                        {tipoAtual === 'Transferência' ? 'Conta de origem' : 'Conta (opcional)'}
+                      </FormLabel>
+                      <Select
+                        value={field.value ? field.value : NO_ACCOUNT_VALUE}
+                        onValueChange={(v) => field.onChange(v === NO_ACCOUNT_VALUE ? '' : v)}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder={tipoAtual === 'Transferência' ? 'Selecione' : 'Sem conta vinculada'} />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          {tipoAtual !== 'Transferência' && (
+                            <SelectItem value={NO_ACCOUNT_VALUE}>Sem conta</SelectItem>
+                          )}
+                          {bankAccounts.filter((a) => a.ativo).map((acc) => (
+                            <SelectItem key={acc.id} value={acc.id}>
+                              <span className="flex items-center gap-2">
+                                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.cor }} />
+                                {acc.nome}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {tipoAtual === 'Transferência' && (
+                  <FormField
+                    control={form.control}
+                    name="conta_destino_id"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="flex items-center gap-2">
+                          <Landmark className="h-3.5 w-3.5 text-muted-foreground" />
+                          Conta de destino
+                        </FormLabel>
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue placeholder="Selecione" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {bankAccounts.filter((a) => a.ativo).map((acc) => (
+                              <SelectItem key={acc.id} value={acc.id}>
+                                <span className="flex items-center gap-2">
+                                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.cor }} />
+                                  {acc.nome}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 )}
-              />
+              </div>
             )}
 
             <FormField

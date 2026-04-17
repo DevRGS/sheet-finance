@@ -9,6 +9,7 @@ import {
   getStoredEmail,
   clearAuthData,
   isAuthenticated,
+  subscribeToAuthChanges,
   type GoogleAuthData,
 } from '@/services/googleApiService';
 
@@ -87,20 +88,21 @@ export function useGoogleAuth() {
 
   // Listen for storage changes (sync state when auth changes in another tab)
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'google_auth_data') {
-        const authData = getAuthData();
+    const unsubscribe = subscribeToAuthChanges((msg) => {
+      if (msg?.type === 'signed_out') {
+        setAuthState(prev => ({ ...prev, isSignedIn: false, authData: null }));
+        return;
+      }
+      if (msg?.type === 'signed_in' || msg?.type === 'updated') {
         const authenticated = isAuthenticated();
         setAuthState(prev => ({
           ...prev,
           isSignedIn: authenticated,
-          authData: authenticated ? authData : null,
+          authData: authenticated ? getAuthData() : null,
         }));
       }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    });
+    return unsubscribe;
   }, []);
 
   const signIn = useCallback(async () => {

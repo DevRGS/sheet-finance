@@ -1,4 +1,4 @@
-export type TransactionType = 'Receita' | 'Despesa';
+export type TransactionType = 'Receita' | 'Despesa' | 'Transferência';
 
 export type PaymentMethod = 'Cartão' | 'PIX' | 'Dinheiro' | 'Transferência' | 'Boleto';
 
@@ -15,12 +15,20 @@ export interface Transaction {
   recorrente_id?: string;
   /** ID da conta bancária de origem/destino */
   conta_id?: string;
+  /** ID da conta bancária destino (apenas para Transferência) */
+  conta_destino_id?: string;
+  /** ID para vincular as duas pontas da transferência (opcional) */
+  transferencia_id?: string;
+  /** Se a transação já foi conferida/conciliada */
+  confirmado?: boolean;
 }
 
 export interface Category {
   id: string;
   nome: string;
   cor: string;
+  /** Tipo da categoria para separar Receitas/Despesas */
+  tipo: 'Receita' | 'Despesa' | 'Ambos';
 }
 
 export interface Goal {
@@ -52,7 +60,7 @@ export interface CategoryData {
 
 export interface TransactionFilters {
   search: string;
-  tipo: 'all' | 'Receita' | 'Despesa';
+  tipo: 'all' | 'Receita' | 'Despesa' | 'Transferência';
   categoria: string;
   periodo: {
     inicio: string | null;

@@ -13,7 +13,7 @@ const PRESETS: { value: Exclude<DashboardPreset, 'custom'>; label: string }[] = 
 ];
 
 export function DashboardFilter() {
-  const { dashboardPeriod, setDashboardPeriod } = useFinanceContext();
+  const { dashboardPeriod, setDashboardPeriod, dashboardView, setDashboardView } = useFinanceContext();
 
   const [customStart, setCustomStart] = useState(dashboardPeriod.start);
   const [customEnd, setCustomEnd] = useState(dashboardPeriod.end);
@@ -44,6 +44,25 @@ export function DashboardFilter() {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <CalendarDays className="h-4 w-4 text-muted-foreground shrink-0 hidden sm:block" />
+
+      <div className="flex items-center gap-2 mr-2">
+        <Button
+          variant={dashboardView === 'realizado' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs sm:text-sm"
+          onClick={() => setDashboardView('realizado')}
+        >
+          Realizado
+        </Button>
+        <Button
+          variant={dashboardView === 'previsto' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8 text-xs sm:text-sm"
+          onClick={() => setDashboardView('previsto')}
+        >
+          Previsto
+        </Button>
+      </div>
 
       {PRESETS.map((p) => (
         <Button

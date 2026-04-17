@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from 'next-themes';
 import {
   Loader2, CheckCircle2, XCircle, RefreshCw, Database, Cloud,
-  AlertTriangle, Plus, FileSpreadsheet, Sun, Moon, ExternalLink,
+  AlertTriangle, Plus, FileSpreadsheet, Sun, Moon,
   ArrowRightLeft, Tags, Target, Landmark, PiggyBank, Settings2,
   Layers, Info,
 } from 'lucide-react';
@@ -107,47 +107,6 @@ const SYNCED_SHEETS = [
   { icon: FileSpreadsheet,label: 'Recorrências',     tab: 'recorrencias',     desc: 'Lançamentos automáticos' },
   { icon: Settings2,      label: 'Contas a pagar',   tab: 'contas_pagar',     desc: 'Bills e recebíveis' },
   { icon: Layers,         label: 'Configurações',    tab: 'config',           desc: 'Parâmetros gerais' },
-];
-
-const SETUP_STEPS = [
-  {
-    step: '01',
-    title: 'Crie um projeto no Google Cloud',
-    desc: 'Acesse o console do Google Cloud, crie um projeto novo (ex.: "FinanceFlow") e anote o nome do projeto.',
-    link: { href: 'https://console.cloud.google.com/projectcreate', label: 'Abrir Google Cloud Console' },
-  },
-  {
-    step: '02',
-    title: 'Habilite as APIs necessárias',
-    desc: 'Dentro do projeto, vá em "APIs e Serviços" → "Biblioteca" e habilite as duas APIs: Google Sheets API e Google Drive API.',
-    link: { href: 'https://console.cloud.google.com/apis/library', label: 'Ir para Biblioteca de APIs' },
-  },
-  {
-    step: '03',
-    title: 'Configure a Tela de Consentimento OAuth',
-    desc: 'Em "APIs e Serviços" → "Tela de consentimento OAuth", selecione "Externo", preencha o nome do app e adicione seu e-mail como usuário de teste. Isso permite que você se autentique antes da verificação do app.',
-  },
-  {
-    step: '04',
-    title: 'Crie as credenciais OAuth 2.0',
-    desc: 'Em "Credenciais", clique em "Criar credenciais" → "ID do cliente OAuth". Escolha tipo "Aplicativo da Web". Em "Origens JavaScript autorizadas" adicione: http://localhost:8080 (desenvolvimento) e o domínio de produção.',
-    link: { href: 'https://console.cloud.google.com/apis/credentials', label: 'Ir para Credenciais' },
-  },
-  {
-    step: '05',
-    title: 'Configure a variável de ambiente',
-    desc: 'Copie o "Client ID" gerado. No arquivo .env.local na raiz do projeto, defina: VITE_GOOGLE_CLIENT_ID=seu-client-id-aqui e reinicie o servidor de desenvolvimento.',
-  },
-  {
-    step: '06',
-    title: 'Conecte sua conta Google',
-    desc: 'De volta ao FinanceFlow, clique em "Conectar com Google" acima. Faça login com a conta que tem permissão na planilha. O acesso solicitado é somente para Sheets e Drive do seu próprio Google Drive.',
-  },
-  {
-    step: '07',
-    title: 'Selecione ou crie a planilha',
-    desc: 'Após autenticar, suas planilhas do Drive aparecem na lista acima. Selecione uma existente ou clique em "Criar planilha FinanceFlow" para criar uma nova. A estrutura de abas é criada automaticamente na primeira conexão.',
-  },
 ];
 
 const Configuracoes = () => {
@@ -477,47 +436,55 @@ const Configuracoes = () => {
               Como configurar? — Guia passo a passo
             </CardTitle>
             <CardDescription>
-              Siga os passos abaixo para conectar o FinanceFlow ao seu Google Drive pela primeira vez.
-              O processo leva cerca de 5 minutos.
+              Em poucos cliques você conecta o FinanceFlow ao seu Google Drive.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <ol className="space-y-6">
-              {SETUP_STEPS.map(({ step, title, desc, link }) => (
-                <li key={step} className="flex gap-4">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
-                    {step}
-                  </div>
-                  <div className="space-y-1 pt-0.5">
-                    <p className="text-sm font-semibold text-foreground">{title}</p>
-                    <p className="text-sm text-muted-foreground leading-relaxed">{desc}</p>
-                    {link && (
-                      <a
-                        href={link.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
-                      >
-                        <ExternalLink className="h-3 w-3" />
-                        {link.label}
-                      </a>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ol>
+              <li className="flex gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                  01
+                </div>
+                <div className="space-y-1 pt-0.5">
+                  <p className="text-sm font-semibold text-foreground">Conecte sua conta Google</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Clique em <strong>Conectar com Google</strong> acima e faça login com a conta que você usa no Google Drive.
+                  </p>
+                </div>
+              </li>
 
-            <div className="mt-6 rounded-lg bg-amber-500/10 border border-amber-500/30 p-4">
-              <p className="text-sm font-medium text-amber-700 dark:text-amber-400 flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 shrink-0" />
-                Dica importante
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Enquanto o app estiver em modo de "Teste" na tela de consentimento OAuth, apenas os e-mails
-                adicionados como usuários de teste poderão fazer login. Para uso pessoal isso é suficiente —
-                não é necessário publicar o app.
-              </p>
-            </div>
+              <li className="flex gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                  02
+                </div>
+                <div className="space-y-1 pt-0.5">
+                  <p className="text-sm font-semibold text-foreground">Escolha uma planilha</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Selecione uma planilha da lista (ou crie uma nova). A estrutura de abas é criada automaticamente na primeira conexão.
+                  </p>
+                </div>
+              </li>
+
+              <li className="flex gap-4">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs font-bold">
+                  03
+                </div>
+                <div className="space-y-2 pt-0.5">
+                  <p className="text-sm font-semibold text-foreground">Crie sua primeira conta e transação</p>
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    Com a planilha conectada, cadastre uma conta (banco/carteira/cartão) e registre suas primeiras entradas e saídas.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Button asChild variant="outline" size="sm" className="gap-2">
+                      <a href={`${import.meta.env.BASE_URL}contas`}>Ir para Contas</a>
+                    </Button>
+                    <Button asChild variant="outline" size="sm" className="gap-2">
+                      <a href={`${import.meta.env.BASE_URL}transacoes`}>Ir para Transações</a>
+                    </Button>
+                  </div>
+                </div>
+              </li>
+            </ol>
           </CardContent>
         </Card>
 

@@ -76,6 +76,8 @@ export function RecurringTransactionsList() {
     if (success) {
       setDeletingId(null);
       toast.success('Transação recorrente excluída com sucesso!');
+    } else {
+      toast.error('Não foi possível excluir. Verifique a conexão/permissões no Google Sheets.');
     }
   };
 
