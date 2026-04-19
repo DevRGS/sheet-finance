@@ -6,6 +6,17 @@ import { cn } from "@/lib/utils";
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const;
 
+/** Valores de cor seguros para CSS custom properties (hex ou hsl(var(--token)) típico shadcn). */
+const SAFE_HEX_COLOR = /^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
+const SAFE_HSL_VAR = /^hsl\(\s*var\(--[\w-]+\)\s*\)$/;
+
+function sanitizeCssColor(value: string | undefined): string | null {
+  if (!value || typeof value !== "string") return null;
+  const v = value.trim();
+  if (SAFE_HEX_COLOR.test(v) || SAFE_HSL_VAR.test(v)) return v;
+  return null;
+}
+
 export type ChartConfig = {
   [k in string]: {
     label?: React.ReactNode;
@@ -74,7 +85,8 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
-    const color = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
+    const raw = itemConfig.theme?.[theme as keyof typeof itemConfig.theme] || itemConfig.color;
+    const color = typeof raw === "string" ? sanitizeCssColor(raw) : null;
     return color ? `  --color-${key}: ${color};` : null;
   })
   .join("\n")}

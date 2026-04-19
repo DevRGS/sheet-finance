@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { useFinanceContext } from '@/contexts/FinanceContext';
+import { devConsoleError, devConsoleWarn } from '@/lib/logger';
 import { getBalanceData } from '@/data/mockData';
 import {
   BarChart,
@@ -81,7 +82,7 @@ export function BalanceChart() {
       const itemYear = parseInt(item.monthKey.substring(0, 4));
       const isValid = itemYear === selectedYear;
       if (!isValid) {
-        console.warn(`[BalanceChart] Filtered out item with monthKey: ${item.monthKey} (year: ${itemYear}, selected: ${selectedYear})`);
+        devConsoleWarn(`[BalanceChart] Filtered out item with monthKey: ${item.monthKey} (year: ${itemYear}, selected: ${selectedYear})`);
       }
       return isValid;
     });
@@ -120,8 +121,8 @@ export function BalanceChart() {
     }
     
     if (result.length !== 12) {
-      console.error(`[BalanceChart] Expected 12 months for year ${selectedYear}, got ${result.length}`);
-      console.error(`[BalanceChart] MonthKeys:`, result.map(d => d.monthKey));
+      devConsoleError(`[BalanceChart] Expected 12 months for year ${selectedYear}, got ${result.length}`);
+      devConsoleError(`[BalanceChart] MonthKeys:`, result.map(d => d.monthKey));
     }
     
     return result;
@@ -156,7 +157,7 @@ export function BalanceChart() {
       // STRICT: Verify monthKey belongs to selected year
       const monthKeyYear = parseInt(monthKey.substring(0, 4));
       if (monthKeyYear !== selectedYear) {
-        console.error(`[BalanceChart chartData] Invalid monthKey: ${monthKey} for year ${selectedYear}`);
+        devConsoleError(`[BalanceChart chartData] Invalid monthKey: ${monthKey} for year ${selectedYear}`);
         continue;
       }
       
@@ -170,7 +171,7 @@ export function BalanceChart() {
         // Verify existing item belongs to selected year
         const existingYear = parseInt(existing.monthKey.substring(0, 4));
         if (existingYear !== selectedYear) {
-          console.warn(`[BalanceChart chartData] Existing item has wrong year: ${existing.monthKey} (expected ${selectedYear})`);
+          devConsoleWarn(`[BalanceChart chartData] Existing item has wrong year: ${existing.monthKey} (expected ${selectedYear})`);
         }
         
         const item: typeof result[0] = {
@@ -251,12 +252,12 @@ export function BalanceChart() {
     });
     
     if (invalidMonths.length > 0) {
-      console.error(`[BalanceChart chartData] Found ${invalidMonths.length} invalid months for year ${selectedYear}:`, invalidMonths.map(m => m.monthKey));
+      devConsoleError(`[BalanceChart chartData] Found ${invalidMonths.length} invalid months for year ${selectedYear}:`, invalidMonths.map(m => m.monthKey));
     }
     
     if (result.length !== 12) {
-      console.error(`[BalanceChart chartData] Expected 12 months for year ${selectedYear}, got ${result.length}`);
-      console.error(`[BalanceChart chartData] MonthKeys:`, result.map(d => d.monthKey));
+      devConsoleError(`[BalanceChart chartData] Expected 12 months for year ${selectedYear}, got ${result.length}`);
+      devConsoleError(`[BalanceChart chartData] MonthKeys:`, result.map(d => d.monthKey));
     }
 
     return result;

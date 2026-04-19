@@ -2,6 +2,7 @@
 import { Transaction, Category, Goal, GoogleSheetsConfig, GoalTransaction, RecurringTransaction, Bill, ForecastTransaction, Budget, BankAccount } from '@/types/finance';
 
 import { getValidToken } from './googleApiService';
+import { devError, devConsoleError, devConsoleWarn } from '@/lib/logger';
 
 declare global {
   interface Window {
@@ -16,12 +17,10 @@ async function getAccessToken(): Promise<string> {
 
 // Helper to handle Google API errors and provide user-friendly messages
 function handleGoogleApiError(error: any): Error {
-  // Log the full error for debugging
-  console.error('Google API Error details:', {
+  devError('Google API', {
     status: error?.status,
     code: error?.result?.error?.code,
     message: error?.result?.error?.message || error?.message,
-    error: error,
   });
 
   // Check for 403 Forbidden error - multiple ways gapi can return this
@@ -132,7 +131,7 @@ async function readSheet(sheetsId: string, range: string): Promise<Record<string
       return obj;
     });
   } catch (error: any) {
-    console.error('Error reading sheet:', error);
+    devConsoleError('Error reading sheet:', error);
     throw handleGoogleApiError(error);
   }
 }
@@ -147,7 +146,7 @@ async function readSheetValues(sheetsId: string, sheetName: string): Promise<str
     });
     return (response.result.values || []) as string[][];
   } catch (error: any) {
-    console.error('Error reading sheet values:', error);
+    devConsoleError('Error reading sheet values:', error);
     throw handleGoogleApiError(error);
   }
 }
@@ -201,7 +200,7 @@ async function appendToSheet(sheetsId: string, range: string, values: string[][]
       },
     });
   } catch (error: any) {
-    console.error('Error appending to sheet:', error);
+    devConsoleError('Error appending to sheet:', error);
     throw handleGoogleApiError(error);
   }
 }
@@ -220,7 +219,7 @@ async function updateSheet(sheetsId: string, range: string, values: string[][]):
       },
     });
   } catch (error: any) {
-    console.error('Error updating sheet:', error);
+    devConsoleError('Error updating sheet:', error);
     throw handleGoogleApiError(error);
   }
 }
@@ -259,7 +258,7 @@ async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number):
       },
     });
   } catch (error: any) {
-    console.error('Error deleting row:', error);
+    devConsoleError('Error deleting row:', error);
     throw handleGoogleApiError(error);
   }
 }
@@ -270,7 +269,10 @@ export interface SpreadsheetItem {
   modifiedTime?: string;
 }
 
-// List all spreadsheets accessible by the authenticated user via Drive API
+/**
+ * Lista planilhas visíveis com o escopo `drive.file` (criadas por esta app ou abertas com ela).
+ * Não é uma listagem ampla de todo o Google Drive.
+ */
 export async function listSpreadsheets(): Promise<SpreadsheetItem[]> {
   const token = await getAccessToken();
 
@@ -379,14 +381,14 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
           try {
             await appendToSheet(credentials.sheetsId, `${sheet.name}!A1`, [sheet.headers]);
           } catch (headerErr) {
-            console.warn(`Could not add header to ${sheet.name}:`, headerErr);
+            devConsoleWarn(`Could not add header to ${sheet.name}:`, headerErr);
           }
         }
       } catch (createErr: any) {
         // If sheets already exist (concurrent init) or another non-fatal error, continue
         const msg: string = createErr?.result?.error?.message || createErr?.message || '';
         if (!msg.includes('already exists')) {
-          console.warn('Could not create new sheets (non-fatal):', createErr);
+          devConsoleWarn('Could not create new sheets (non-fatal):', createErr);
         }
       }
     }
@@ -408,7 +410,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         }
         if (changed) await updateSheet(credentials.sheetsId, 'transacoes!A1', [headers]);
       } catch (e) {
-        console.warn('Could not migrate transacoes header:', e);
+        devConsoleWarn('Could not migrate transacoes header:', e);
       }
     }
 
@@ -429,7 +431,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         }
         if (changed) await updateSheet(credentials.sheetsId, 'categorias!A1', [headers]);
       } catch (e) {
-        console.warn('Could not migrate categorias header:', e);
+        devConsoleWarn('Could not migrate categorias header:', e);
       }
     }
 
@@ -453,7 +455,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         await appendToSheet(credentials.sheetsId, 'categorias!A2', defaultCategories);
       }
     } catch (e) {
-      console.warn('Could not seed categories:', e);
+      devConsoleWarn('Could not seed categories:', e);
     }
 
     // Seed config metadata if empty (non-critical)
@@ -466,7 +468,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         ]);
       }
     } catch (e) {
-      console.warn('Could not seed config:', e);
+      devConsoleWarn('Could not seed config:', e);
     }
 
     return { success: true, message: 'Planilha inicializada com sucesso!' };
@@ -497,7 +499,7 @@ export async function fetchTransactions(credentials: GoogleSheetsConfig): Promis
       confirmado: String(row.confirmado || 'false').toLowerCase() === 'true',
     }));
   } catch (error) {
-    console.error('Error fetching transactions:', error);
+    devConsoleError('Error fetching transactions:', error);
     return [];
   }
 }
@@ -527,7 +529,7 @@ export async function addTransaction(
     await appendToSheet(credentials.sheetsId, 'transacoes!A2', [transactionData]);
     return true;
   } catch (error) {
-    console.error('Error adding transaction:', error);
+    devConsoleError('Error adding transaction:', error);
     return false;
   }
 }
@@ -557,7 +559,7 @@ export async function addTransactionsBatch(
     await appendToSheet(credentials.sheetsId, 'transacoes!A2', rows);
     return true;
   } catch (error) {
-    console.error('Error batch adding transactions:', error);
+    devConsoleError('Error batch adding transactions:', error);
     return false;
   }
 }
@@ -613,7 +615,7 @@ export async function updateTransaction(
     await updateSheet(credentials.sheetsId, `transacoes!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating transaction:', error);
+    devConsoleError('Error updating transaction:', error);
     return false;
   }
 }
@@ -628,7 +630,7 @@ export async function deleteTransaction(
     await deleteRow(credentials.sheetsId, 'transacoes', found.rowIndex0);
     return true;
   } catch (error) {
-    console.error('Error deleting transaction:', error);
+    devConsoleError('Error deleting transaction:', error);
     return false;
   }
 }
@@ -644,7 +646,7 @@ export async function fetchCategories(credentials: GoogleSheetsConfig): Promise<
         await updateSheet(credentials.sheetsId, 'categorias!A1', [[...headers, 'tipo']]);
       }
     } catch (e) {
-      console.warn('Could not migrate categorias header inside fetchCategories:', e);
+      devConsoleWarn('Could not migrate categorias header inside fetchCategories:', e);
     }
 
     const data = await readSheet(credentials.sheetsId, 'categorias');
@@ -656,7 +658,7 @@ export async function fetchCategories(credentials: GoogleSheetsConfig): Promise<
       tipo: (String(row.tipo || '') as Category['tipo']) || 'Despesa',
     }));
   } catch (error) {
-    console.error('Error fetching categories:', error);
+    devConsoleError('Error fetching categories:', error);
     return [];
   }
 }
@@ -677,7 +679,7 @@ export async function addCategory(
     await appendToSheet(credentials.sheetsId, 'categorias!A2', [categoryData]);
     return true;
   } catch (error) {
-    console.error('Error adding category:', error);
+    devConsoleError('Error adding category:', error);
     return false;
   }
 }
@@ -712,7 +714,7 @@ export async function updateCategory(
     await updateSheet(credentials.sheetsId, `categorias!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating category:', error);
+    devConsoleError('Error updating category:', error);
     return false;
   }
 }
@@ -727,7 +729,7 @@ export async function deleteCategory(
     await deleteRow(credentials.sheetsId, 'categorias', found.rowIndex0);
     return true;
   } catch (error) {
-    console.error('Error deleting category:', error);
+    devConsoleError('Error deleting category:', error);
     return false;
   }
 }
@@ -773,7 +775,7 @@ export async function fetchGoals(credentials: GoogleSheetsConfig): Promise<Goal[
     
     return goals;
   } catch (error) {
-    console.error('Error fetching goals:', error);
+    devConsoleError('Error fetching goals:', error);
     return [];
   }
 }
@@ -796,7 +798,7 @@ export async function addGoal(
     await appendToSheet(credentials.sheetsId, 'metas!A2', [goalData]);
     return true;
   } catch (error) {
-    console.error('Error adding goal:', error);
+    devConsoleError('Error adding goal:', error);
     return false;
   }
 }
@@ -835,7 +837,7 @@ export async function updateGoal(
     await updateSheet(credentials.sheetsId, `metas!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating goal:', error);
+    devConsoleError('Error updating goal:', error);
     return false;
   }
 }
@@ -850,7 +852,7 @@ export async function deleteGoal(
     await deleteRow(credentials.sheetsId, 'metas', found.rowIndex0);
     return true;
   } catch (error) {
-    console.error('Error deleting goal:', error);
+    devConsoleError('Error deleting goal:', error);
     return false;
   }
 }
@@ -881,7 +883,7 @@ export async function fetchGoalTransactions(
         return parseDate(b.data).getTime() - parseDate(a.data).getTime();
       });
   } catch (error) {
-    console.error('Error fetching goal transactions:', error);
+    devConsoleError('Error fetching goal transactions:', error);
     return [];
   }
 }
@@ -908,7 +910,7 @@ export async function addGoalTransaction(
     
     return true;
   } catch (error) {
-    console.error('Error adding goal transaction:', error);
+    devConsoleError('Error adding goal transaction:', error);
     return false;
   }
 }
@@ -931,7 +933,7 @@ export async function deleteGoalTransaction(
     
     return true;
   } catch (error) {
-    console.error('Error deleting goal transaction:', error);
+    devConsoleError('Error deleting goal transaction:', error);
     return false;
   }
 }
@@ -963,7 +965,7 @@ async function recalculateGoalValue(
     ];
     await updateSheet(credentials.sheetsId, `metas!A${goalIndex + 2}`, [row]);
   } catch (error) {
-    console.error('Error recalculating goal value:', error);
+    devConsoleError('Error recalculating goal value:', error);
   }
 }
 
@@ -997,7 +999,7 @@ export async function fetchRecurringTransactions(
         return parseDate(b.data_inicio).getTime() - parseDate(a.data_inicio).getTime();
       });
   } catch (error) {
-    console.error('Error fetching recurring transactions:', error);
+    devConsoleError('Error fetching recurring transactions:', error);
     return [];
   }
 }
@@ -1026,7 +1028,7 @@ export async function addRecurringTransaction(
     await appendToSheet(credentials.sheetsId, 'transacoes_recorrentes!A2', [transactionData]);
     return true;
   } catch (error) {
-    console.error('Error adding recurring transaction:', error);
+    devConsoleError('Error adding recurring transaction:', error);
     return false;
   }
 }
@@ -1079,7 +1081,7 @@ export async function updateRecurringTransaction(
     await updateSheet(credentials.sheetsId, `transacoes_recorrentes!A${rowIndex + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating recurring transaction:', error);
+    devConsoleError('Error updating recurring transaction:', error);
     return false;
   }
 }
@@ -1098,7 +1100,7 @@ export async function deleteRecurringTransaction(
     await deleteRow(credentials.sheetsId, 'transacoes_recorrentes', rowIndex);
     return true;
   } catch (error) {
-    console.error('Error deleting recurring transaction:', error);
+    devConsoleError('Error deleting recurring transaction:', error);
     return false;
   }
 }
@@ -1248,7 +1250,7 @@ export async function fetchBills(
         return dateA.getTime() - dateB.getTime();
       });
   } catch (error) {
-    console.error('Error fetching bills:', error);
+    devConsoleError('Error fetching bills:', error);
     return [];
   }
 }
@@ -1274,7 +1276,7 @@ export async function addBill(
     await appendToSheet(credentials.sheetsId, 'contas!A2', [billData]);
     return true;
   } catch (error) {
-    console.error('Error adding bill:', error);
+    devConsoleError('Error adding bill:', error);
     return false;
   }
 }
@@ -1320,7 +1322,7 @@ export async function updateBill(
     await updateSheet(credentials.sheetsId, `contas!A${rowIndex + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating bill:', error);
+    devConsoleError('Error updating bill:', error);
     return false;
   }
 }
@@ -1340,7 +1342,7 @@ export async function deleteBill(
     await deleteRow(credentials.sheetsId, 'contas', rowIndex);
     return true;
   } catch (error) {
-    console.error('Error deleting bill:', error);
+    devConsoleError('Error deleting bill:', error);
     return false;
   }
 }
@@ -1357,7 +1359,7 @@ export async function fetchBudgets(credentials: GoogleSheetsConfig): Promise<Bud
       mes: String(row.mes || ''),
     }));
   } catch (error) {
-    console.error('Error fetching budgets:', error);
+    devConsoleError('Error fetching budgets:', error);
     return [];
   }
 }
@@ -1368,7 +1370,7 @@ export async function addBudget(budget: Omit<Budget, 'id'>, credentials: GoogleS
     await appendToSheet(credentials.sheetsId, 'orcamentos!A2', [row]);
     return true;
   } catch (error) {
-    console.error('Error adding budget:', error);
+    devConsoleError('Error adding budget:', error);
     return false;
   }
 }
@@ -1398,7 +1400,7 @@ export async function updateBudget(id: string, budget: Partial<Budget>, credenti
     await updateSheet(credentials.sheetsId, `orcamentos!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating budget:', error);
+    devConsoleError('Error updating budget:', error);
     return false;
   }
 }
@@ -1409,7 +1411,7 @@ export async function deleteBudget(id: string, credentials: GoogleSheetsConfig):
     await deleteRow(credentials.sheetsId, 'orcamentos', found.rowIndex0);
     return true;
   } catch (error) {
-    console.error('Error deleting budget:', error);
+    devConsoleError('Error deleting budget:', error);
     return false;
   }
 }
@@ -1429,7 +1431,7 @@ export async function fetchBankAccounts(credentials: GoogleSheetsConfig): Promis
       ativo: String(row.ativo || 'true').toLowerCase() === 'true',
     }));
   } catch (error) {
-    console.error('Error fetching bank accounts:', error);
+    devConsoleError('Error fetching bank accounts:', error);
     return [];
   }
 }
@@ -1440,7 +1442,7 @@ export async function addBankAccount(account: Omit<BankAccount, 'id'>, credentia
     await appendToSheet(credentials.sheetsId, 'contas_bancarias!A2', [row]);
     return true;
   } catch (error) {
-    console.error('Error adding bank account:', error);
+    devConsoleError('Error adding bank account:', error);
     return false;
   }
 }
@@ -1476,7 +1478,7 @@ export async function updateBankAccount(id: string, account: Partial<BankAccount
     await updateSheet(credentials.sheetsId, `contas_bancarias!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
-    console.error('Error updating bank account:', error);
+    devConsoleError('Error updating bank account:', error);
     return false;
   }
 }
@@ -1487,7 +1489,7 @@ export async function deleteBankAccount(id: string, credentials: GoogleSheetsCon
     await deleteRow(credentials.sheetsId, 'contas_bancarias', found.rowIndex0);
     return true;
   } catch (error) {
-    console.error('Error deleting bank account:', error);
+    devConsoleError('Error deleting bank account:', error);
     return false;
   }
 }

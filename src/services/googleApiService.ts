@@ -1,27 +1,31 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { GoogleAuthData } from '@/types/googleAuth';
+import {
+  clearAuthSession,
+  getAuthSession,
+  purgeLegacyAuthStorage,
+  setAuthSession,
+} from '@/services/google/googleAuthSession';
+
 declare global {
   interface Window {
     google: any;
   }
 }
 
-export interface GoogleAuthData {
-  email: string;
-  accessToken: string;
-  expireAt: number;
-}
+export type { GoogleAuthData };
 
-const CLIENT_ID = '992015110192-5gu30mqmin256cpvdl9tdb4e6p8vonvr.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.metadata.readonly';
-const AUTH_DATA_KEY = 'google_auth_data';
-const STORED_EMAIL_KEY = 'google_user_email';
+const CLIENT_ID =
+  import.meta.env.VITE_GOOGLE_CLIENT_ID ||
+  '992015110192-5gu30mqmin256cpvdl9tdb4e6p8vonvr.apps.googleusercontent.com';
+
+/** Escopos mínimos: Sheets + ficheiros criados/abertos pela app (sem leitura ampla do Drive). */
+export const GOOGLE_OAUTH_SCOPES =
+  'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+
 const AUTH_CHANNEL = 'financeflow_auth';
 
-// Prefer less persistent storage for access tokens.
-// Keep email hint in localStorage to enable silent refresh across sessions.
-const authStorage: Storage = sessionStorage;
-
-type AuthBroadcastMessage =
+export type AuthBroadcastMessage =
   | { type: 'signed_in'; authData: GoogleAuthData }
   | { type: 'signed_out' }
   | { type: 'updated'; authData: GoogleAuthData };
@@ -36,8 +40,21 @@ function broadcast(message: AuthBroadcastMessage) {
   }
 }
 
+/** Aplica mensagem de outro separador — atualiza apenas memória (não persistência). */
+export function applyAuthBroadcastMessage(msg: AuthBroadcastMessage): void {
+  if (msg.type === 'signed_out') {
+    clearAuthSession();
+    return;
+  }
+  if (msg.type === 'signed_in' || msg.type === 'updated') {
+    setAuthSession(msg.authData);
+  }
+}
+
 // Initialize Google Identity Services
 export async function initializeGoogleAPI(): Promise<void> {
+  purgeLegacyAuthStorage();
+
   return new Promise((resolve, reject) => {
     if (window.google?.accounts) {
       resolve();
@@ -70,7 +87,7 @@ export function loginWithGoogle(): Promise<GoogleAuthData> {
 
     const tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
-      scope: SCOPES,
+      scope: GOOGLE_OAUTH_SCOPES,
       callback: async (response: any) => {
         if (response.error) {
           reject(new Error(response.error));
@@ -106,13 +123,11 @@ export function loginWithGoogle(): Promise<GoogleAuthData> {
       },
     });
 
-    // Use 'select_account' to show account picker without forcing full re-consent
     tokenClient.requestAccessToken({ prompt: 'select_account' });
   });
 }
 
-// Try to get a new token silently (no popup).
-// Works when the user's Google session is still active and consent was previously granted.
+// Silent token refresh — usa apenas email já conhecido na sessão em memória (mesmo separador).
 export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
   return new Promise((resolve, reject) => {
     if (!window.google?.accounts) {
@@ -120,14 +135,13 @@ export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
       return;
     }
 
-    // Give up after 10 seconds — silent auth should be fast
     const timeout = setTimeout(() => {
       reject(new Error('Tempo esgotado para autenticação silenciosa'));
     }, 10000);
 
     const tokenClient = window.google.accounts.oauth2.initTokenClient({
       client_id: CLIENT_ID,
-      scope: SCOPES,
+      scope: GOOGLE_OAUTH_SCOPES,
       callback: async (response: any) => {
         clearTimeout(timeout);
 
@@ -160,82 +174,52 @@ export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
       },
     });
 
-    // Empty prompt = no UI; fails if session is not active or consent missing
     tokenClient.requestAccessToken({ prompt: '', login_hint: loginHint });
   });
 }
 
-// Get valid token from cache.
-// If expired, tries silent refresh using stored email.
-// Throws if not authenticated — does NOT open popups.
+// Get valid token from in-memory session; silent refresh só com email já em sessão.
 export async function getValidToken(): Promise<string> {
-  const stored = authStorage.getItem(AUTH_DATA_KEY);
+  const authData = getAuthSession();
+  const now = Date.now();
+  const buffer = 5 * 60 * 1000;
 
-  if (stored) {
-    try {
-      const authData: GoogleAuthData = JSON.parse(stored);
-      const now = Date.now();
-      const buffer = 5 * 60 * 1000; // 5-minute safety buffer
-
-      if (authData.expireAt > now + buffer) {
-        return authData.accessToken;
-      }
-    } catch {
-      // Corrupted data, fall through
-    }
+  if (authData && authData.expireAt > now + buffer) {
+    return authData.accessToken;
   }
 
-  // Token missing or expired — attempt silent refresh before giving up
-  const email = getStoredEmail();
-  if (email) {
+  if (authData?.email) {
     try {
       await initializeGoogleAPI();
-      const newAuthData = await silentTokenRefresh(email);
+      const newAuthData = await silentTokenRefresh(authData.email);
       saveAuthData(newAuthData);
       return newAuthData.accessToken;
     } catch {
-      // Silent refresh failed (Google session expired); user must log in manually
+      // Silent refresh failed
     }
   }
 
   throw new Error('Sessão expirada. Faça login com Google para continuar.');
 }
 
-// Save auth data to localStorage (also persists email for silent refresh)
+/** Grava apenas em memória e notifica outros separadores (sem persistir token). */
 export function saveAuthData(authData: GoogleAuthData): void {
-  authStorage.setItem(AUTH_DATA_KEY, JSON.stringify(authData));
-  if (authData.email) {
-    localStorage.setItem(STORED_EMAIL_KEY, authData.email);
-  }
+  setAuthSession(authData);
   broadcast({ type: 'updated', authData });
 }
 
-// Get auth data from localStorage
 export function getAuthData(): GoogleAuthData | null {
-  const stored = authStorage.getItem(AUTH_DATA_KEY);
-  if (!stored) return null;
-  try {
-    return JSON.parse(stored) as GoogleAuthData;
-  } catch {
-    return null;
-  }
+  return getAuthSession();
 }
 
-// Get the email stored for silent refresh hints
-export function getStoredEmail(): string | null {
-  return localStorage.getItem(STORED_EMAIL_KEY);
-}
-
-// Clear auth token (keeps email so silent refresh can be attempted next time)
 export function clearAuthData(): void {
-  authStorage.removeItem(AUTH_DATA_KEY);
-  // Intentionally keep STORED_EMAIL_KEY so silent refresh can be attempted on next visit
+  clearAuthSession();
+  purgeLegacyAuthStorage();
   broadcast({ type: 'signed_out' });
 }
 
-// Check if the current stored token is still valid
 export function isAuthenticated(): boolean {
-  const authData = getAuthData();
+  const authData = getAuthSession();
   if (!authData) return false;
   const now = Date.now();
   const buffer = 5 * 60 * 1000;

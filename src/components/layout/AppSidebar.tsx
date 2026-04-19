@@ -1,4 +1,4 @@
-import { LayoutDashboard, ArrowRightLeft, Settings, PieChart, Wallet, PiggyBank, CreditCard } from 'lucide-react';
+import { LayoutDashboard, ArrowRightLeft, Settings, PieChart, Wallet, PiggyBank, CreditCard, Shield, FileText } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { NavLink } from '@/components/NavLink';
 import { useLocation } from 'react-router-dom';
@@ -40,7 +40,7 @@ export function AppSidebar() {
           </div>
           {!collapsed && (
             <div className="flex flex-col">
-              <span className="text-lg font-semibold text-sidebar-foreground">FinanceFlow</span>
+              <span className="text-lg font-semibold text-sidebar-foreground">FluxioFinance</span>
               <span className="text-xs text-muted-foreground">Controle Financeiro</span>
             </div>
           )}
@@ -74,7 +74,23 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="border-t border-sidebar-border p-3 space-y-1">
+      <SidebarFooter className="border-t border-sidebar-border p-3 space-y-2">
+        <div className={collapsed ? 'flex flex-col items-center gap-1' : 'flex flex-col gap-1 px-1'}>
+          <NavLink
+            to="/privacidade"
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-sidebar-foreground transition-colors"
+          >
+            <Shield className="h-3.5 w-3.5 shrink-0" />
+            {!collapsed && <span>Privacidade</span>}
+          </NavLink>
+          <NavLink
+            to="/dados"
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-sidebar-foreground transition-colors"
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0" />
+            {!collapsed && <span>Uso dos dados</span>}
+          </NavLink>
+        </div>
         <ThemeToggle collapsed={collapsed} />
         {!collapsed && (
           <p className="px-2 text-xs text-muted-foreground">Versão 2.0.0</p>

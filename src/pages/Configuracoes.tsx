@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useFinanceContext } from '@/contexts/FinanceContext';
 import { useGoogleSheetsConfig } from '@/hooks/useGoogleSheetsConfig';
@@ -19,8 +20,11 @@ import { useGoogleAuthContext } from '@/contexts/GoogleAuthContext';
 import { listSpreadsheets, createSpreadsheet, SpreadsheetItem } from '@/services/googleSheetsGapi';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { extractSpreadsheetId } from '@/lib/spreadsheetId';
+import { hasGoogleConnectConsent, setGoogleConnectConsent } from '@/lib/privacyConsent';
+import { PrivacyConsentDialog } from '@/components/privacy/PrivacyConsentDialog';
 
-const FINANCE_FLOW_NAME = 'FinanceFlow';
+const FLUXIO_FINANCE_NAME = 'FluxioFinance';
 const AUTO_CONNECT_KEY = 'auto_connect_attempts';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +123,8 @@ const Configuracoes = () => {
   const [isLoadingSheets, setIsLoadingSheets] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [sheetsError, setSheetsError] = useState<string | null>(null);
+  const [spreadsheetIdPaste, setSpreadsheetIdPaste] = useState('');
+  const [privacyDialogOpen, setPrivacyDialogOpen] = useState(false);
 
   const handleLoadSpreadsheets = useCallback(async () => {
     setIsLoadingSheets(true);
@@ -135,13 +141,11 @@ const Configuracoes = () => {
   }, []);
 
   useEffect(() => {
-    if (isSignedIn) {
-      handleLoadSpreadsheets();
-    } else {
+    if (!isSignedIn) {
       setSpreadsheets([]);
       setSheetsError(null);
     }
-  }, [isSignedIn, handleLoadSpreadsheets]);
+  }, [isSignedIn]);
 
   const handleSelectSpreadsheet = (id: string) => {
     const currentConfig = config || { isConnected: false };
@@ -152,15 +156,25 @@ const Configuracoes = () => {
     }
   };
 
+  const handleApplyPastedId = () => {
+    const id = extractSpreadsheetId(spreadsheetIdPaste);
+    if (!id) {
+      toast.error('Cole um link ou ID válido da planilha (Google Sheets).');
+      return;
+    }
+    handleSelectSpreadsheet(id);
+    setSpreadsheetIdPaste('');
+  };
+
   const handleCreateSpreadsheet = async () => {
     setIsCreating(true);
     try {
-      const spreadsheetId = await createSpreadsheet(FINANCE_FLOW_NAME);
+      const spreadsheetId = await createSpreadsheet(FLUXIO_FINANCE_NAME);
       await handleLoadSpreadsheets();
       const currentConfig = config || { isConnected: false };
       saveConfig({ ...currentConfig, sheetsId: spreadsheetId, isConnected: false });
       localStorage.removeItem(AUTO_CONNECT_KEY);
-      toast.success(`Planilha "${FINANCE_FLOW_NAME}" criada! Inicializando estrutura...`);
+      toast.success(`Planilha "${FLUXIO_FINANCE_NAME}" criada! Inicializando estrutura...`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erro ao criar planilha';
       toast.error(message);
@@ -169,13 +183,26 @@ const Configuracoes = () => {
     }
   };
 
-  const handleSignIn = async () => {
+  const runSignIn = async () => {
     try {
       const result = await signIn();
       toast.success(`Conectado como ${result.email}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Erro ao conectar com Google');
     }
+  };
+
+  const handleSignIn = async () => {
+    if (!hasGoogleConnectConsent()) {
+      setPrivacyDialogOpen(true);
+      return;
+    }
+    await runSignIn();
+  };
+
+  const handlePrivacyAcceptAndConnect = async () => {
+    setGoogleConnectConsent();
+    await runSignIn();
   };
 
   const handleSignOut = async () => {
@@ -189,6 +216,11 @@ const Configuracoes = () => {
 
   return (
     <AppLayout>
+      <PrivacyConsentDialog
+        open={privacyDialogOpen}
+        onOpenChange={setPrivacyDialogOpen}
+        onAccept={handlePrivacyAcceptAndConnect}
+      />
       <AppHeader title="Configurações" />
 
       <main className="flex-1 space-y-6 p-4 md:p-6 max-w-3xl mx-auto w-full">
@@ -205,7 +237,7 @@ const Configuracoes = () => {
             </CardTitle>
             <CardDescription>
               Todos os seus dados são salvos diretamente no Google Drive — sem banco de dados externo.
-              Conecte sua conta e escolha (ou crie) a planilha que o FinanceFlow vai usar.
+              Conecte sua conta e escolha (ou crie) a planilha que o FluxioFinance vai usar.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -225,7 +257,8 @@ const Configuracoes = () => {
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Autorização necessária</AlertTitle>
                   <AlertDescription>
-                    Conecte sua conta Google para listar e selecionar uma planilha.
+                    Conecte sua conta Google para criar ou associar uma planilha. O acesso ao Drive é restrito ao
+                    necessário (sem leitura ampla dos seus ficheiros).
                   </AlertDescription>
                 </Alert>
               )}
@@ -259,22 +292,57 @@ const Configuracoes = () => {
                     <span className="w-full border-t" />
                   </div>
                   <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">Planilhas no Drive</span>
+                    <span className="bg-card px-2 text-muted-foreground">Associar planilha</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
+                  <Label htmlFor="sheet-id-paste">Colar link ou ID da planilha</Label>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Use uma planilha que você criou ou que está partilhada com a mesma conta Google. Cole o URL da
+                    barra de endereços ou só o ID.
+                  </p>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <Input
+                      id="sheet-id-paste"
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                      value={spreadsheetIdPaste}
+                      onChange={(e) => setSpreadsheetIdPaste(e.target.value)}
+                      className="font-mono text-sm"
+                    />
+                    <Button type="button" variant="secondary" className="shrink-0" onClick={handleApplyPastedId}>
+                      Usar esta planilha
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">Ou crie / escolha na lista</span>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label>Selecione a planilha de destino</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <Label>Planilhas a que esta app já tem acesso</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Com permissão restrita, a lista mostra sobretudo ficheiros criados por aqui. Carregue a lista
+                        quando precisar.
+                      </p>
+                    </div>
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
                       onClick={handleLoadSpreadsheets}
                       disabled={isLoadingSheets}
-                      className="gap-1 h-8 text-xs"
+                      className="gap-1 h-8 text-xs shrink-0"
                     >
                       <RefreshCw className={cn('h-3 w-3', isLoadingSheets && 'animate-spin')} />
-                      Atualizar
+                      Carregar lista
                     </Button>
                   </div>
 
@@ -321,10 +389,13 @@ const Configuracoes = () => {
                       })}
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-6 text-muted-foreground">
+                    <div className="flex flex-col items-center justify-center rounded-lg border border-dashed p-6 text-muted-foreground text-center">
                       <FileSpreadsheet className="h-8 w-8 mb-2 opacity-40" />
-                      <p className="text-sm">Nenhuma planilha encontrada no Drive</p>
-                      <p className="text-xs mt-1 opacity-70">Crie uma nova abaixo</p>
+                      <p className="text-sm">Lista vazia ou ainda não carregada</p>
+                      <p className="text-xs mt-1 opacity-80 max-w-md">
+                        Toque em &quot;Carregar lista&quot; para ver planilhas já criadas por este app, ou cole o ID
+                        acima / crie uma planilha nova.
+                      </p>
                     </div>
                   )}
 
@@ -335,7 +406,7 @@ const Configuracoes = () => {
                     className="w-full gap-2"
                   >
                     {isCreating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                    Criar nova planilha "{FINANCE_FLOW_NAME}"
+                    Criar nova planilha "{FLUXIO_FINANCE_NAME}"
                   </Button>
                 </div>
               </>
@@ -436,7 +507,7 @@ const Configuracoes = () => {
               Como configurar? — Guia passo a passo
             </CardTitle>
             <CardDescription>
-              Em poucos cliques você conecta o FinanceFlow ao seu Google Drive.
+              Em poucos cliques você conecta o FluxioFinance ao seu Google Drive.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -460,7 +531,8 @@ const Configuracoes = () => {
                 <div className="space-y-1 pt-0.5">
                   <p className="text-sm font-semibold text-foreground">Escolha uma planilha</p>
                   <p className="text-sm text-muted-foreground leading-relaxed">
-                    Selecione uma planilha da lista (ou crie uma nova). A estrutura de abas é criada automaticamente na primeira conexão.
+                    Associe uma planilha (link/ID, lista ou botão criar nova). A estrutura de abas é criada
+                    automaticamente na primeira conexão.
                   </p>
                 </div>
               </li>

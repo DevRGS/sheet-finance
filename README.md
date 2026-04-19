@@ -1,8 +1,8 @@
-# FinanceFlow - Sistema de Controle Financeiro Pessoal
+# FluxioFinance - Sistema de Controle Financeiro Pessoal
 
 Sistema moderno e completo de controle financeiro pessoal com dashboard interativo, gráficos analíticos e integração direta com Google Sheets como banco de dados.
 
-![FinanceFlow](https://img.shields.io/badge/FinanceFlow-v1.0.0-blue)
+![FluxioFinance](https://img.shields.io/badge/FluxioFinance-v1.0.0-blue)
 ![React](https://img.shields.io/badge/React-18.3.1-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.8.3-3178C6?logo=typescript)
 ![Vite](https://img.shields.io/badge/Vite-5.4.19-646CFF?logo=vite)
@@ -23,7 +23,7 @@ Sistema moderno e completo de controle financeiro pessoal com dashboard interati
 
 ## 🎯 Sobre o Projeto
 
-O FinanceFlow é uma aplicação web moderna para controle financeiro pessoal que permite gerenciar receitas, despesas, categorias, metas financeiras, transações recorrentes e contas a pagar/receber. Todos os dados são armazenados diretamente no Google Sheets, proporcionando acesso fácil e sincronização automática.
+O FluxioFinance é uma aplicação web moderna para controle financeiro pessoal que permite gerenciar receitas, despesas, categorias, metas financeiras, transações recorrentes e contas a pagar/receber. Todos os dados são armazenados diretamente no Google Sheets, proporcionando acesso fácil e sincronização automática.
 
 ## ✨ Funcionalidades
 
@@ -98,9 +98,9 @@ O FinanceFlow é uma aplicação web moderna para controle financeiro pessoal qu
 - **date-fns 3.6.0** - Manipulação de datas
 - **Sonner 1.7.4** - Sistema de notificações toast
 
-### Backend/Integração
-- **Google Sheets API** - Armazenamento e sincronização de dados
-- **JWT Authentication** - Autenticação via Service Account
+### Integração (sem backend próprio)
+- **Google Identity Services** — OAuth 2.0 no navegador (fluxo implícito / token)
+- **Google Sheets API** e **Google Drive API** — leitura/escrita na planilha escolhida
 
 ## 📦 Pré-requisitos
 
@@ -108,8 +108,8 @@ Antes de começar, você precisará ter instalado:
 
 - **Node.js** (versão 18 ou superior) - [Download](https://nodejs.org/)
 - **npm** ou **yarn** - Gerenciadores de pacotes
-- **Conta Google Cloud** - Para criar Service Account e obter credenciais
-- **Google Sheets** - Uma planilha para armazenar os dados
+- **Projeto na Google Cloud Console** — para criar credenciais OAuth 2.0 (tipo *Aplicação Web*) e ativar as APIs **Google Sheets** e **Google Drive**
+- Opcional: ficheiro `.env` com `VITE_GOOGLE_CLIENT_ID` (ver `.env.example`)
 
 ## 🚀 Instalação
 
@@ -129,26 +129,38 @@ npm install
 npm run dev
 ```
 
-A aplicação estará disponível em `http://localhost:5173`
+A aplicação estará disponível em `http://localhost:8080` (porta definida em `vite.config.ts`)
 
 ## ⚙️ Configuração
 
-### Como funciona (sem servidor, sem APIs pagas)
+### Como funciona (sem servidor de dados, sem APIs pagas obrigatórias)
 
-Este projeto usa **Google Login (OAuth via Google Identity Services)** no navegador e acessa o **Google Sheets** diretamente (via `gapi`), usando o token do usuário.
+A app usa **Google Identity Services** no navegador e chama a **Google Sheets API** (e o necessário do Drive) com o **access token** do utilizador. O token é mantido **apenas em memória** durante a sessão do separador; não é gravado em `localStorage` nem em `sessionStorage`. O **ID da planilha** e preferências (tema, regras de importação, consentimento de privacidade) podem ficar no armazenamento local — não são credenciais OAuth.
 
-Isso significa que:
-- Você **não** precisa de Service Account nem chave privada.
-- A planilha deve estar **na sua conta Google** (ou compartilhada com o usuário logado).
-- O app pode **listar** suas planilhas e também **criar** uma nova (Drive API), tudo após você autorizar no popup do Google.
+Variável opcional:
+
+| Variável | Descrição |
+|----------|-----------|
+| `VITE_GOOGLE_CLIENT_ID` | Client ID OAuth 2.0 (Aplicação Web). Se omitida, o build usa o ID embutido no repositório para compatibilidade. |
+
+Copie `.env.example` para `.env` e preencha se usar o seu próprio cliente OAuth na Google Cloud Console (origens JavaScript autorizadas = URL onde a app corre, ex. `http://localhost:8080` e a URL de produção).
+
+### Escopos OAuth solicitados
+
+| Escopo | Uso |
+|--------|-----|
+| `https://www.googleapis.com/auth/spreadsheets` | Ler e escrever na planilha associada |
+| `https://www.googleapis.com/auth/drive.file` | Acesso a ficheiros criados por esta app ou abertos com ela (sem leitura ampla de todo o Drive) |
 
 ### Passo a passo (primeiro uso)
 
 1. Rode o projeto e abra a aplicação.
-2. Vá em **Configurações**.
-3. Clique em **Conectar com Google** e autorize o acesso (Sheets + listar planilhas do Drive).
-4. Selecione uma planilha existente **ou** crie uma nova pela própria tela.
-5. Ao selecionar/criar, o app **inicializa automaticamente** as abas necessárias na planilha.
+2. Leia **Privacidade** / **Uso dos dados** no menu (rodapé da barra lateral), se desejar.
+3. Vá em **Configurações**, aceite o consentimento no diálogo e clique em **Conectar com Google**.
+4. Associe uma planilha: **crie uma nova** com o botão, **cole o ID ou URL** de uma planilha sua, ou use **Carregar lista** para ver planilhas já ligadas a esta app (permissão `drive.file`).
+5. Ao guardar o ID, o app **inicializa automaticamente** as abas necessárias na planilha.
+
+**Nota:** Após recarregar a página, será necessário voltar a **Conectar com Google** (a sessão OAuth não é persistida em disco, por desenho).
 
 A aplicação criará automaticamente as abas necessárias na planilha:
 - `config` - Configurações do sistema
@@ -271,8 +283,9 @@ sheet-finance/
 │   ├── contexts/          # Contextos React
 │   ├── data/              # Funções de processamento de dados
 │   ├── hooks/             # Custom hooks
-│   ├── pages/             # Páginas da aplicação
-│   ├── services/          # Serviços (Google Sheets API)
+│   ├── pages/             # Páginas (incl. Privacidade, Dados)
+│   ├── services/          # Serviços (Google API, Sheets)
+│   ├── services/google/   # Sessão OAuth em memória
 │   ├── types/             # Definições TypeScript
 │   └── lib/               # Utilitários
 ├── index.html             # HTML principal
@@ -291,12 +304,14 @@ A aplicação é totalmente responsiva e otimizada para:
 
 Todos os componentes se adaptam automaticamente ao tamanho da tela, proporcionando uma experiência otimizada em qualquer dispositivo.
 
-## 🔒 Segurança
+## 🔒 Segurança e privacidade
 
-- O token de autenticação e a configuração da planilha ficam armazenados no navegador (atualmente via **localStorage**)
-- Nenhuma informação sensível é enviada para servidores externos
-- A autenticação é feita diretamente entre o navegador e a Google Sheets API
-- Recomenda-se usar uma conta Google dedicada apenas para este projeto (opcional)
+- **Token OAuth:** mantido só em **memória** (perde-se ao fechar o separador ou recarregar). Não há `access_token` em `localStorage`/`sessionStorage`.
+- **Dados financeiros:** ficam na **sua** Google Sheets; o autor do repositório **não** recebe uma cópia num backend deste projeto (alojamento estático só distribui HTML/JS/CSS públicos).
+- **O que pode ficar localmente:** ID da planilha (`google_sheets_config`), tema, regras de importação, contadores de onboarding, registo de aceitação da política (versão) — itens não sensíveis.
+- **Limitações de uma SPA:** o `client_id` é público; qualquer proteção forte de segredos exigiria backend. Confie na origem do site que visita (ex.: GitHub Pages do repositório oficial).
+- **CSP:** em build de produção, o Vite injeta uma meta tag `Content-Security-Policy` restritiva; `style-src` inclui `'unsafe-inline'` por compatibilidade com estilos do ecossistema (ver `vite.config.ts`).
+- **LGPD:** textos informativos em `/privacidade` e `/dados` — ajuste com assessoria jurídica se necessário.
 
 ## 🤝 Contribuindo
 

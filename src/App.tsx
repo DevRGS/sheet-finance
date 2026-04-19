@@ -10,6 +10,8 @@ import Index from "./pages/Index";
 import Transacoes from "./pages/Transacoes";
 import Categorias from "./pages/Categorias";
 import Configuracoes from "./pages/Configuracoes";
+import Privacidade from "./pages/Privacidade";
+import Dados from "./pages/Dados";
 import Orcamentos from "./pages/Orcamentos";
 import Contas from "./pages/Contas";
 import NotFound from "./pages/NotFound";
@@ -32,6 +34,8 @@ const App = () => (
             <Route path="/orcamentos" element={<Orcamentos />} />
             <Route path="/contas" element={<Contas />} />
             <Route path="/configuracoes" element={<Configuracoes />} />
+            <Route path="/privacidade" element={<Privacidade />} />
+            <Route path="/dados" element={<Dados />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

@@ -2,14 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   initializeGoogleAPI,
   loginWithGoogle,
-  silentTokenRefresh,
   getValidToken,
   saveAuthData,
   getAuthData,
-  getStoredEmail,
   clearAuthData,
   isAuthenticated,
   subscribeToAuthChanges,
+  applyAuthBroadcastMessage,
   type GoogleAuthData,
 } from '@/services/googleApiService';
 
@@ -28,44 +27,11 @@ export function useGoogleAuth() {
     authData: null,
   });
 
-  // Initialize: restore session or attempt silent refresh
+  // Sem restaurar token de storage — credenciais só em memória (perdidas ao recarregar).
   useEffect(() => {
     const init = async () => {
       try {
         await initializeGoogleAPI();
-
-        // Case 1: valid token already in storage
-        if (isAuthenticated()) {
-          const authData = getAuthData();
-          setAuthState({
-            isSignedIn: true,
-            isLoading: false,
-            error: null,
-            authData,
-          });
-          return;
-        }
-
-        // Case 2: token expired but email stored — try silent refresh
-        const storedEmail = getStoredEmail();
-        if (storedEmail) {
-          try {
-            const newAuthData = await silentTokenRefresh(storedEmail);
-            saveAuthData(newAuthData);
-            setAuthState({
-              isSignedIn: true,
-              isLoading: false,
-              error: null,
-              authData: newAuthData,
-            });
-            return;
-          } catch {
-            // Silent refresh failed; user's Google session has ended
-            // Fall through to "not signed in" state
-          }
-        }
-
-        // Case 3: not authenticated, needs manual login
         setAuthState({
           isSignedIn: false,
           isLoading: false,
@@ -73,7 +39,9 @@ export function useGoogleAuth() {
           authData: null,
         });
       } catch (error) {
-        console.error('Error initializing Google API:', error);
+        if (import.meta.env.DEV) {
+          console.error('Error initializing Google API:', error);
+        }
         setAuthState({
           isSignedIn: false,
           isLoading: false,
@@ -86,16 +54,16 @@ export function useGoogleAuth() {
     init();
   }, []);
 
-  // Listen for storage changes (sync state when auth changes in another tab)
   useEffect(() => {
     const unsubscribe = subscribeToAuthChanges((msg) => {
+      applyAuthBroadcastMessage(msg);
       if (msg?.type === 'signed_out') {
-        setAuthState(prev => ({ ...prev, isSignedIn: false, authData: null }));
+        setAuthState((prev) => ({ ...prev, isSignedIn: false, authData: null }));
         return;
       }
       if (msg?.type === 'signed_in' || msg?.type === 'updated') {
         const authenticated = isAuthenticated();
-        setAuthState(prev => ({
+        setAuthState((prev) => ({
           ...prev,
           isSignedIn: authenticated,
           authData: authenticated ? getAuthData() : null,
@@ -107,7 +75,7 @@ export function useGoogleAuth() {
 
   const signIn = useCallback(async () => {
     try {
-      setAuthState(prev => ({ ...prev, isLoading: true, error: null }));
+      setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
       await initializeGoogleAPI();
       const authData = await loginWithGoogle();
       saveAuthData(authData);
@@ -120,7 +88,7 @@ export function useGoogleAuth() {
       return authData;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer login';
-      setAuthState(prev => ({ ...prev, isLoading: false, error: errorMessage }));
+      setAuthState((prev) => ({ ...prev, isLoading: false, error: errorMessage }));
       throw error;
     }
   }, []);
@@ -131,7 +99,7 @@ export function useGoogleAuth() {
       setAuthState({ isSignedIn: false, isLoading: false, error: null, authData: null });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer logout';
-      setAuthState(prev => ({ ...prev, error: errorMessage }));
+      setAuthState((prev) => ({ ...prev, error: errorMessage }));
     }
   }, []);
 
@@ -139,7 +107,6 @@ export function useGoogleAuth() {
     try {
       return await getValidToken();
     } catch {
-      // Token unavailable — trigger full login
       const authData = await signIn();
       return authData.accessToken;
     }
