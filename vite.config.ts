@@ -51,7 +51,10 @@ function injectFaviconHref(): Plugin {
       } catch {
         /* sem ficheiro */
       }
-      const href = `${viteBase}favicon.png?v=${hash}`;
+      // Sempre path absoluto (/...); evita URLs relativas (ex.: em /configuracoes) e colapsa // acidental.
+      const base = viteBase.replace(/\/$/, "") || "";
+      const pathPart = base === "" || base === "/" ? "" : base;
+      const href = `${pathPart}/favicon.png?v=${hash}`.replace(/\/+/g, "/");
       return html.replaceAll("__FAVICON_HREF__", href);
     },
   };

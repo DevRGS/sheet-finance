@@ -149,6 +149,9 @@ Copie `.env.example` para `.env` e preencha se usar o seu próprio cliente OAuth
 
 | Escopo | Uso |
 |--------|-----|
+| `openid` | Sessão OpenID Connect (necessário para consentimento coerente com email/perfil) |
+| `https://www.googleapis.com/auth/userinfo.email` | Obter o email no login (API `oauth2/v2/userinfo`) |
+| `https://www.googleapis.com/auth/userinfo.profile` | Nome/foto no perfil (opcional para UX) |
 | `https://www.googleapis.com/auth/spreadsheets` | Ler e escrever na planilha associada |
 | `https://www.googleapis.com/auth/drive.file` | Acesso a ficheiros criados por esta app ou abertos com ela (sem leitura ampla de todo o Drive) |
 

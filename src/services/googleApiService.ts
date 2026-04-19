@@ -17,11 +17,19 @@ export type { GoogleAuthData };
 
 const CLIENT_ID =
   import.meta.env.VITE_GOOGLE_CLIENT_ID ||
-  '992015110192-5gu30mqmin256cpvdl9tdb4e6p8vonvr.apps.googleusercontent.com';
+  '818883045223-qn1jk1r9bg4mn847ntso5fdo9sda3bg5.apps.googleusercontent.com';
 
-/** Escopos mínimos: Sheets + ficheiros criados/abertos pela app (sem leitura ampla do Drive). */
-export const GOOGLE_OAUTH_SCOPES =
-  'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+/**
+ * Sheets + Drive restrito + identidade (openid/userinfo) para obter o email sem 401 em oauth2/v2/userinfo.
+ * Sem userinfo.email/openid o token não autoriza GET https://www.googleapis.com/oauth2/v2/userinfo.
+ */
+export const GOOGLE_OAUTH_SCOPES = [
+  'openid',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive.file',
+].join(' ');
 
 const AUTH_CHANNEL = 'financeflow_auth';
 
@@ -103,8 +111,11 @@ export function loginWithGoogle(): Promise<GoogleAuthData> {
           const expiresIn = response.expires_in || 3600;
           const expireAt = Date.now() + expiresIn * 1000;
 
+          const email =
+            userInfoResponse.ok && typeof userInfo.email === 'string' ? userInfo.email : '';
+
           const authData: GoogleAuthData = {
-            email: userInfo.email || '',
+            email,
             accessToken: response.access_token,
             expireAt,
           };
@@ -159,8 +170,13 @@ export function silentTokenRefresh(loginHint: string): Promise<GoogleAuthData> {
           });
           const userInfo = await userInfoRes.json();
 
+          const email =
+            userInfoRes.ok && typeof userInfo.email === 'string'
+              ? userInfo.email
+              : loginHint;
+
           resolve({
-            email: userInfo.email || loginHint,
+            email,
             accessToken: response.access_token,
             expireAt,
           });

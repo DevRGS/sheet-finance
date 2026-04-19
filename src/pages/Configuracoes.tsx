@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTheme } from 'next-themes';
 import {
   Loader2, CheckCircle2, XCircle, RefreshCw, Database, Cloud,
@@ -125,6 +125,7 @@ const Configuracoes = () => {
   const [sheetsError, setSheetsError] = useState<string | null>(null);
   const [spreadsheetIdPaste, setSpreadsheetIdPaste] = useState('');
   const [privacyDialogOpen, setPrivacyDialogOpen] = useState(false);
+  const createSpreadsheetLock = useRef(false);
 
   const handleLoadSpreadsheets = useCallback(async () => {
     setIsLoadingSheets(true);
@@ -167,6 +168,8 @@ const Configuracoes = () => {
   };
 
   const handleCreateSpreadsheet = async () => {
+    if (createSpreadsheetLock.current) return;
+    createSpreadsheetLock.current = true;
     setIsCreating(true);
     try {
       const spreadsheetId = await createSpreadsheet(FLUXIO_FINANCE_NAME);
@@ -179,6 +182,7 @@ const Configuracoes = () => {
       const message = error instanceof Error ? error.message : 'Erro ao criar planilha';
       toast.error(message);
     } finally {
+      createSpreadsheetLock.current = false;
       setIsCreating(false);
     }
   };
