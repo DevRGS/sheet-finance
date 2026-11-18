@@ -1,0 +1,15 @@
+# Fins de linha: o repositório usa LF em todos os sistemas (Windows, Linux, macOS).
+# Evita que um checkout no Windows converta tudo para CRLF e o git passe a mostrar
+# todos os arquivos como modificados.
+* text=auto eol=lf
+
+# Binários (nunca converter)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
