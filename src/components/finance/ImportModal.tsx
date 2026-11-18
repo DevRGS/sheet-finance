@@ -152,7 +152,7 @@ interface ImportModalProps {
 type Step = 'upload' | 'review' | 'done';
 
 export function ImportModal({ open, onOpenChange }: ImportModalProps) {
-  const { transactions, addTransaction, categories, isLoading, isConnected, hasOfflineSnapshot } = useFinanceContext();
+  const { transactions, addTransactions, categories, isLoading, isConnected, hasOfflineSnapshot } = useFinanceContext();
   const [step, setStep] = useState<Step>('upload');
   const [parsed, setParsed] = useState<ParsedTransaction[]>([]);
   const [importing, setImporting] = useState(false);
@@ -299,17 +299,21 @@ export function ImportModal({ open, onOpenChange }: ImportModalProps) {
     }
 
     setImporting(true);
-    let count = 0;
-    for (const item of toImport) {
+    // Tudo num único lote (1 escrita por bloco de 500), em vez de 1 escrita + 1 leitura por transação.
+    const defaultCat = categories[0]?.nome || 'Outros';
+    const rows = toImport.map((item) => {
       const { _duplicate, _selected, _needsReview, _reason, _key, ...tx } = item;
-      const defaultCat = categories[0]?.nome || 'Outros';
-      const success = await addTransaction({ ...tx, categoria: tx.categoria || defaultCat });
-      if (success) count++;
-    }
-    setImportedCount(count);
+      return { ...tx, categoria: tx.categoria || defaultCat };
+    });
+    const { added, failed } = await addTransactions(rows);
+    setImportedCount(added);
     setImporting(false);
+    if (added === 0 && failed > 0) {
+      toast.error('Não foi possível importar as transações. Verifique a conexão/permissões e tente novamente.');
+      return;
+    }
     setStep('done');
-    toast.success(`${count} transação(ões) importada(s) com sucesso!`);
+    toast.success(`${added} transação(ões) importada(s) com sucesso!`);
   };
 
   const handleClose = () => {

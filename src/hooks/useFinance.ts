@@ -452,6 +452,103 @@ export function useFinance(isSignedIn = false, accountEmail: string | null = nul
     }
   }, [transactions, isConnected, config, isValid]);
 
+  /**
+   * Desfaz uma remoção/edição otimista de vários itens: volta a pôr `originals` na ordem do snapshot,
+   * preservando o que mudou entretanto na lista (itens adicionados ou removidos por outras ações).
+   */
+  const restoreTransactions = useCallback((snapshot: Transaction[], originals: Transaction[]) => {
+    const originalById = new Map(originals.map((t) => [t.id, t]));
+    setTransactions((prev) => {
+      const prevById = new Map(prev.map((t) => [t.id, t]));
+      const snapshotIds = new Set(snapshot.map((t) => t.id));
+      const restored = snapshot
+        .filter((t) => prevById.has(t.id) || originalById.has(t.id))
+        .map((t) => originalById.get(t.id) ?? prevById.get(t.id)!);
+      return [...restored, ...prev.filter((t) => !snapshotIds.has(t.id))];
+    });
+  }, []);
+
+  /** Exclusão em massa: 1 leitura + 1 escrita na planilha, seja qual for a quantidade. */
+  const deleteTransactions = useCallback(async (ids: string[]): Promise<{ deleted: number; failed: number }> => {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return { deleted: 0, failed: 0 };
+    // Offline: nada é persistido (mesmo comportamento da exclusão individual)
+    if (!(isConnected && config && isValid)) return { deleted: 0, failed: idSet.size };
+
+    const snapshot = transactions;
+    const targets = snapshot.filter((t) => idSet.has(t.id));
+    setTransactions((prev) => prev.filter((t) => !idSet.has(t.id)));
+    setIsLoading(true);
+    try {
+      // `notFound`: já não existem na planilha — contam como excluídas.
+      await sheetsService.deleteTransactionsBatch([...idSet], config);
+      targets.forEach((t) => {
+        if (t.recorrente_id) addSkippedRecurrence(t.recorrente_id, t.data.substring(0, 7));
+      });
+      return { deleted: idSet.size, failed: 0 };
+    } catch (error) {
+      console.error('Error deleting transactions:', error);
+      restoreTransactions(snapshot, targets);
+      return { deleted: 0, failed: idSet.size };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [transactions, isConnected, config, isValid, restoreTransactions]);
+
+  /** Edição em massa: 1 leitura + 1 escrita na planilha, seja qual for a quantidade. */
+  const updateTransactions = useCallback(async (
+    ids: string[],
+    changes: Partial<Transaction>,
+  ): Promise<{ updated: number; failed: number }> => {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return { updated: 0, failed: 0 };
+
+    const snapshot = transactions;
+    const targets = snapshot.filter((t) => idSet.has(t.id));
+    setTransactions((prev) => prev.map((t) => (idSet.has(t.id) ? { ...t, ...changes } : t)));
+    if (!(isConnected && config && isValid)) return { updated: idSet.size, failed: 0 };
+
+    setIsLoading(true);
+    try {
+      const { done, notFound } = await sheetsService.updateTransactionsBatch(
+        [...idSet].map((id) => ({ id, changes })),
+        config,
+      );
+      if (notFound.length > 0) {
+        // Não existem na planilha: desfaz só esses na lista.
+        const missing = new Set(notFound);
+        restoreTransactions(snapshot, targets.filter((t) => missing.has(t.id)));
+      }
+      return { updated: done.length, failed: notFound.length };
+    } catch (error) {
+      console.error('Error updating transactions:', error);
+      restoreTransactions(snapshot, targets);
+      return { updated: 0, failed: idSet.size };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [transactions, isConnected, config, isValid, restoreTransactions]);
+
+  /** Inclusão em massa (importação): 1 escrita por bloco de 500 + 1 leitura para obter os ids. */
+  const addTransactions = useCallback(async (list: Omit<Transaction, 'id'>[]): Promise<{ added: number; failed: number }> => {
+    if (list.length === 0) return { added: 0, failed: 0 };
+    if (!(isConnected && config && isValid)) return { added: 0, failed: list.length };
+
+    setIsLoading(true);
+    try {
+      const success = await sheetsService.addTransactionsBatch(list, config);
+      // Relê sempre: mesmo numa falha parcial (algum bloco gravado) a lista fica fiel à planilha.
+      const fresh = await sheetsService.fetchTransactions(config);
+      if (fresh.length > 0 || transactions.length === 0) setTransactions(fresh);
+      return success ? { added: list.length, failed: 0 } : { added: 0, failed: list.length };
+    } catch (error) {
+      console.error('Error adding transactions:', error);
+      return { added: 0, failed: list.length };
+    } finally {
+      setIsLoading(false);
+    }
+  }, [transactions.length, isConnected, config, isValid]);
+
   const addCategory = useCallback(async (category: Omit<Category, 'id'>) => {
     const tempId = `temp_${crypto.randomUUID()}`;
     setCategories((prev) => [...prev, { ...category, id: tempId }]);
@@ -980,8 +1077,11 @@ export function useFinance(isSignedIn = false, accountEmail: string | null = nul
     connectToSheets,
     loadData,
     addTransaction,
+    addTransactions,
     updateTransaction,
+    updateTransactions,
     deleteTransaction,
+    deleteTransactions,
     addCategory,
     updateCategory,
     deleteCategory,

@@ -190,7 +190,14 @@ interface TransactionListProps {
 }
 
 export function TransactionList({ limit, showTitle = true }: TransactionListProps) {
-  const { filteredTransactions, deleteTransaction, updateTransaction, categories } = useFinanceContext();
+  const {
+    filteredTransactions,
+    deleteTransaction,
+    deleteTransactions,
+    updateTransaction,
+    updateTransactions,
+    categories,
+  } = useFinanceContext();
 
   // ── Single item actions ──
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
@@ -254,15 +261,14 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
     else toast.error('Não foi possível excluir. Verifique a conexão/permissões no Google Sheets.');
   };
 
-  // ── Bulk delete ──
+  // ── Bulk delete ── (um único pedido à planilha, seja qual for a quantidade)
   const handleBulkDelete = async () => {
     setBulkLoading(true);
     try {
-      const results = await Promise.all([...selectedIds].map((id) => deleteTransaction(id)));
-      const okCount = results.filter(Boolean).length;
-      if (okCount > 0) toast.success(`${okCount} transação(ões) excluída(s).`);
-      if (okCount !== selectedCount) toast.error('Algumas exclusões falharam. Verifique conexão/permissões.');
-      if (okCount > 0) exitSelectionMode();
+      const { deleted, failed } = await deleteTransactions([...selectedIds]);
+      if (deleted > 0) toast.success(`${deleted} transação(ões) excluída(s).`);
+      if (failed > 0) toast.error(`Não foi possível excluir ${failed} transação(ões). Verifique a conexão/permissões e tente novamente.`);
+      if (deleted > 0) exitSelectionMode();
     } catch {
       toast.error('Erro ao excluir transações.');
     } finally {
@@ -275,11 +281,11 @@ export function TransactionList({ limit, showTitle = true }: TransactionListProp
   const handleBulkEdit = async (
     patch: Partial<Pick<Transaction, 'tipo' | 'categoria' | 'forma_pagamento'>>
   ) => {
-    const targets = filteredTransactions.filter((t) => selectedIds.has(t.id));
     try {
-      await Promise.all(targets.map((t) => updateTransaction({ ...t, ...patch })));
-      toast.success(`${selectedCount} transação(ões) atualizada(s).`);
-      exitSelectionMode();
+      const { updated, failed } = await updateTransactions([...selectedIds], patch);
+      if (updated > 0) toast.success(`${updated} transação(ões) atualizada(s).`);
+      if (failed > 0) toast.error(`Não foi possível atualizar ${failed} transação(ões). Verifique a conexão/permissões e tente novamente.`);
+      if (updated > 0) exitSelectionMode();
     } catch {
       toast.error('Erro ao atualizar transações.');
     }

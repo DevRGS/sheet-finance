@@ -11,8 +11,22 @@ import { getValidToken, markSessionExpired } from '@/services/googleApiService';
 
 const SHEETS_BASE = 'https://sheets.googleapis.com/v4/spreadsheets';
 const REQUEST_TIMEOUT_MS = 30_000;
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
-const RETRY_DELAYS_MS = [600, 1800];
+const TRANSIENT_STATUS = new Set([500, 502, 503, 504]);
+const MAX_TRANSIENT_RETRIES = 2;
+
+// ── Quota da Sheets API ──────────────────────────────────────────────────────
+// Limites do Google (por minuto): 60 leituras e 60 escritas por usuário por projeto
+// (300 por projeto). https://developers.google.com/workspace/sheets/api/limits
+// Ficamos um pouco abaixo para sobrar margem a outros separadores abertos.
+const QUOTA_WINDOW_MS = 60_000;
+const QUOTA_LIMIT: Record<QuotaKind, number> = { read: 55, write: 55 };
+// Backoff recomendado pelo Google para 429: min(2^n s + até 1 s aleatório, máximo).
+const MAX_BACKOFF_MS = 32_000;
+const MAX_QUOTA_RETRIES = 6; // 1+2+4+8+16+32 s ≈ cobre a renovação de 1 minuto
+/** Esperas abaixo disto não são mostradas na UI. */
+const NOTICE_THRESHOLD_MS = 1_000;
+
+export type QuotaKind = 'read' | 'write';
 
 export class SheetsApiError extends Error {
   status: number;
@@ -28,12 +42,100 @@ export class SheetsApiError extends Error {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const backoffMs = (attempt: number) => Math.min(2 ** attempt * 1000 + Math.random() * 1000, MAX_BACKOFF_MS);
+
+/** Horários dos pedidos do último minuto (janela deslizante) e pausas impostas por 429. */
+const quotaHistory: Record<QuotaKind, number[]> = { read: [], write: [] };
+const quotaPausedUntil: Record<QuotaKind, number> = { read: 0, write: 0 };
+
+export interface QuotaWaitState {
+  /** Há pedidos parados à espera da quota. */
+  waiting: boolean;
+  /** Estimativa (epoch ms) de quando a fila volta a andar. */
+  resumeAt: number;
+}
+
+const quotaListeners = new Set<(state: QuotaWaitState) => void>();
+let quotaWaiters = 0;
+let quotaResumeAt = 0;
+
+function emitQuotaState(): void {
+  const state: QuotaWaitState = { waiting: quotaWaiters > 0, resumeAt: quotaResumeAt };
+  quotaListeners.forEach((listener) => {
+    try {
+      listener(state);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
+/** Avisa a UI quando pedidos estão a aguardar a quota do Google Sheets. */
+export function subscribeToQuotaWaits(listener: (state: QuotaWaitState) => void): () => void {
+  quotaListeners.add(listener);
+  return () => {
+    quotaListeners.delete(listener);
+  };
+}
+
+/** Pausa todos os pedidos da categoria (após 429): evita insistir enquanto o Google recusa. */
+function pauseQuota(kind: QuotaKind, ms: number): void {
+  quotaPausedUntil[kind] = Math.max(quotaPausedUntil[kind], Date.now() + ms);
+}
+
+/** Aguarda vaga na quota da categoria e regista o pedido na janela. */
+async function acquireQuota(kind: QuotaKind): Promise<void> {
+  let noticed = false;
+  try {
+    for (;;) {
+      const now = Date.now();
+      const history = quotaHistory[kind];
+      while (history.length > 0 && history[0] <= now - QUOTA_WINDOW_MS) history.shift();
+
+      const windowWait = history.length >= QUOTA_LIMIT[kind] ? history[0] + QUOTA_WINDOW_MS - now : 0;
+      const wait = Math.max(windowWait, quotaPausedUntil[kind] - now);
+      if (wait <= 0) {
+        history.push(now);
+        return;
+      }
+
+      if (wait >= NOTICE_THRESHOLD_MS) {
+        if (!noticed) {
+          noticed = true;
+          quotaWaiters += 1;
+        }
+        quotaResumeAt = Math.max(quotaResumeAt, now + wait);
+        emitQuotaState();
+      }
+      await sleep(wait + 25);
+    }
+  } finally {
+    if (noticed) {
+      quotaWaiters -= 1;
+      if (quotaWaiters === 0) quotaResumeAt = 0;
+      emitQuotaState();
+    }
+  }
+}
+
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, MAX_BACKOFF_MS * 2);
+  const date = Date.parse(header);
+  return Number.isNaN(date) ? null : Math.max(0, Math.min(date - Date.now(), MAX_BACKOFF_MS * 2));
+}
+
 async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: unknown): Promise<{ result: T }> {
+  const kind: QuotaKind = method === 'GET' ? 'read' : 'write';
   // POST (append/create/batchUpdate) não é idempotente: repetir após timeout/5xx pode duplicar linhas.
   // Só o 429 garante que o pedido não foi processado.
   const idempotent = method !== 'POST';
+  let transientRetries = 0;
+  let quotaRetries = 0;
 
-  for (let attempt = 0; ; attempt++) {
+  for (;;) {
+    await acquireQuota(kind);
     const token = await getValidToken();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -51,8 +153,8 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: un
       });
     } catch (error) {
       clearTimeout(timer);
-      if (idempotent && attempt < RETRY_DELAYS_MS.length) {
-        await sleep(RETRY_DELAYS_MS[attempt]);
+      if (idempotent && transientRetries < MAX_TRANSIENT_RETRIES) {
+        await sleep(backoffMs(transientRetries++));
         continue;
       }
       const aborted = error instanceof DOMException && error.name === 'AbortError';
@@ -70,9 +172,15 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: un
       return { result: data as T };
     }
 
-    const retryable = res.status === 429 || (idempotent && RETRYABLE_STATUS.has(res.status));
-    if (retryable && attempt < RETRY_DELAYS_MS.length) {
-      await sleep(RETRY_DELAYS_MS[attempt]);
+    if (res.status === 429 && quotaRetries < MAX_QUOTA_RETRIES) {
+      // Quota esgotada (por exemplo, outro separador aberto): pausa a categoria inteira e tenta de novo.
+      pauseQuota(kind, parseRetryAfterMs(res.headers.get('Retry-After')) ?? backoffMs(quotaRetries));
+      quotaRetries += 1;
+      continue;
+    }
+
+    if (idempotent && TRANSIENT_STATUS.has(res.status) && transientRetries < MAX_TRANSIENT_RETRIES) {
+      await sleep(backoffMs(transientRetries++));
       continue;
     }
 
@@ -80,7 +188,9 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: un
     if (res.status === 401) markSessionExpired();
     throw new SheetsApiError(
       res.status,
-      payload?.error?.message || res.statusText || `Erro ${res.status}`,
+      res.status === 429
+        ? 'Limite de requisições do Google Sheets atingido. Aguarde um minuto e tente novamente.'
+        : payload?.error?.message || res.statusText || `Erro ${res.status}`,
       payload?.error?.status,
     );
   }

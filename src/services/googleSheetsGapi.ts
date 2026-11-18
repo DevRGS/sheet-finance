@@ -183,43 +183,120 @@ async function updateSheet(sheetsId: string, range: string, values: string[][]):
   }
 }
 
-// Delete row from sheet via Sheets API
-async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number): Promise<void> {
-  await ensureGapiReady();
+/** sheetId (numérico) de cada aba, por planilha — evita ler os metadados a cada exclusão. */
+const sheetIdCache = new Map<string, Map<string, number>>();
 
-  try {
-    // Get sheet ID
+function forgetSheetIds(sheetsId: string): void {
+  sheetIdCache.delete(sheetsId);
+}
+
+async function getSheetId(sheetsId: string, sheetName: string, refresh = false): Promise<number> {
+  let titles = refresh ? undefined : sheetIdCache.get(sheetsId);
+  if (!titles || !titles.has(sheetName)) {
     const spreadsheet = await sheetsApi.spreadsheets.get({
       spreadsheetId: sheetsId,
+      fields: 'sheets.properties(sheetId,title)',
     });
-
-    const sheet = spreadsheet.result.sheets?.find(
-      (s: any) => s.properties.title === sheetName
+    titles = new Map<string, number>(
+      (spreadsheet.result.sheets || []).map((s: any) => [s.properties.title, s.properties.sheetId]),
     );
+    sheetIdCache.set(sheetsId, titles);
+  }
+  const sheetId = titles.get(sheetName);
+  if (sheetId === undefined) {
+    throw new Error(`Sheet ${sheetName} not found`);
+  }
+  return sheetId;
+}
 
-    if (!sheet) {
-      throw new Error(`Sheet ${sheetName} not found`);
-    }
+/**
+ * Remove várias linhas (índices 0-based dos dados, sem o cabeçalho) num único batchUpdate.
+ * Agrupa índices contíguos e apaga de baixo para cima, para cada remoção não deslocar as seguintes.
+ */
+async function deleteRowsAt(sheetsId: string, sheetName: string, rowIndexes0: number[]): Promise<void> {
+  if (rowIndexes0.length === 0) return;
+  await ensureGapiReady();
 
-    await sheetsApi.spreadsheets.batchUpdate({
+  const descending = [...new Set(rowIndexes0)].sort((a, b) => b - a);
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (const idx of descending) {
+    const last = ranges[ranges.length - 1];
+    if (last && idx === last.start - 1) last.start = idx;
+    else ranges.push({ start: idx, end: idx + 1 });
+  }
+
+  const run = (sheetId: number) =>
+    sheetsApi.spreadsheets.batchUpdate({
       spreadsheetId: sheetsId,
       resource: {
-        requests: [{
+        requests: ranges.map((r) => ({
           deleteDimension: {
             range: {
-              sheetId: sheet.properties.sheetId,
+              sheetId,
               dimension: 'ROWS',
-              startIndex: rowIndex + 1, // +1 for header row
-              endIndex: rowIndex + 2,
+              startIndex: r.start + 1, // +1 for header row
+              endIndex: r.end + 1,
             },
           },
-        }],
+        })),
       },
     });
+
+  try {
+    try {
+      await run(await getSheetId(sheetsId, sheetName));
+    } catch (error: any) {
+      // A aba pode ter sido recriada (sheetId novo). O batchUpdate é atómico: um 400 não aplicou nada.
+      if (error?.status !== 400) throw error;
+      await run(await getSheetId(sheetsId, sheetName, true));
+    }
   } catch (error: any) {
-    devConsoleError('Error deleting row:', error);
+    devConsoleError('Error deleting rows:', error);
     throw handleGoogleApiError(error);
   }
+}
+
+// Delete a single row from sheet
+async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number): Promise<void> {
+  await deleteRowsAt(sheetsId, sheetName, [rowIndex]);
+}
+
+/**
+ * Índice (0-based, sem cabeçalho) da primeira linha de cada id, a partir de uma única leitura.
+ */
+function indexRowsById(values: string[][], sheetName: string): { headers: string[]; rows: string[][]; index: Map<string, number> } {
+  const [headers = [], ...rows] = values;
+  const idCol = headers.findIndex((h: string) => h === 'id');
+  if (idCol === -1) throw new Error(`Sheet ${sheetName} não possui coluna 'id'.`);
+  const index = new Map<string, number>();
+  rows.forEach((row, i) => {
+    const rowId = String(row[idCol] || '');
+    if (rowId && !index.has(rowId)) index.set(rowId, i);
+  });
+  return { headers, rows, index };
+}
+
+/** Apaga as linhas de vários ids com 1 leitura + 1 escrita, seja qual for a quantidade. */
+async function deleteRowsByIds(
+  sheetsId: string,
+  sheetName: string,
+  ids: string[],
+): Promise<{ done: string[]; notFound: string[] }> {
+  const { index } = indexRowsById(await readSheetValues(sheetsId, sheetName), sheetName);
+  const done: string[] = [];
+  const notFound: string[] = [];
+  const rowIndexes: number[] = [];
+  for (const id of new Set(ids)) {
+    const rowIndex = index.get(id);
+    if (rowIndex === undefined) {
+      notFound.push(id);
+    } else {
+      rowIndexes.push(rowIndex);
+      done.push(id);
+    }
+  }
+  await deleteRowsAt(sheetsId, sheetName, rowIndexes);
+  return { done, notFound };
 }
 
 export interface SpreadsheetItem {
@@ -364,6 +441,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
     // Create missing sheets (non-critical — wrapped so a failure here doesn't block access)
     if (sheetsToCreate.length > 0) {
       try {
+        forgetSheetIds(credentials.sheetsId);
         await sheetsApi.spreadsheets.batchUpdate({
           spreadsheetId: credentials.sheetsId,
           resource: {
@@ -525,7 +603,9 @@ export async function addTransaction(
   }
 }
 
-// Batch-add multiple transactions at once (used for recurring materialization)
+const APPEND_CHUNK_ROWS = 500;
+
+// Batch-add multiple transactions at once (recurring materialization, CSV/OFX import)
 export async function addTransactionsBatch(
   transactions: Omit<Transaction, 'id'>[],
   credentials: GoogleSheetsConfig
@@ -547,12 +627,61 @@ export async function addTransactionsBatch(
       t.transferencia_id || '',
       (t.confirmado ?? false).toString(),
     ]);
-    await appendToSheet(credentials.sheetsId, 'transacoes!A2', rows);
+    // Blocos de 500 linhas: cada bloco é 1 escrita e fica bem abaixo dos ~2 MB recomendados por pedido.
+    for (let i = 0; i < rows.length; i += APPEND_CHUNK_ROWS) {
+      await appendToSheet(credentials.sheetsId, 'transacoes!A2', rows.slice(i, i + APPEND_CHUNK_ROWS));
+    }
     return true;
   } catch (error) {
     devConsoleError('Error batch adding transactions:', error);
     return false;
   }
+}
+
+/** Monta a linha completa (na ordem dos cabeçalhos da aba) aplicando `transaction` sobre a linha existente. */
+function buildTransactionRow(
+  headers: string[],
+  existingObj: Record<string, string>,
+  id: string,
+  transaction: Partial<Transaction>,
+): string[] {
+  const merged: Transaction = {
+    id,
+    data: String(transaction.data ?? existingObj.data ?? ''),
+    tipo: (transaction.tipo ?? (existingObj.tipo as Transaction['tipo'])) as Transaction['tipo'],
+    descricao: String(transaction.descricao ?? existingObj.descricao ?? ''),
+    valor: transaction.valor !== undefined ? transaction.valor : parseFloat(existingObj.valor || '0') || 0,
+    categoria: String(transaction.categoria ?? existingObj.categoria ?? ''),
+    forma_pagamento: (transaction.forma_pagamento ?? (existingObj.forma_pagamento as Transaction['forma_pagamento'])) as Transaction['forma_pagamento'],
+    observacao: (transaction.observacao ?? existingObj.observacao ?? undefined) as Transaction['observacao'],
+    recorrente_id: (transaction.recorrente_id ?? existingObj.recorrente_id ?? undefined) as Transaction['recorrente_id'],
+    conta_id: (transaction.conta_id ?? existingObj.conta_id ?? undefined) as Transaction['conta_id'],
+    conta_destino_id: (transaction.conta_destino_id ?? existingObj.conta_destino_id ?? undefined) as Transaction['conta_destino_id'],
+    transferencia_id: (transaction.transferencia_id ?? existingObj.transferencia_id ?? undefined) as Transaction['transferencia_id'],
+    confirmado:
+      transaction.confirmado !== undefined
+        ? transaction.confirmado
+        : String(existingObj.confirmado || 'false').toLowerCase() === 'true',
+  };
+
+  return headers.map((h) => {
+    switch (h) {
+      case 'id': return merged.id;
+      case 'data': return merged.data;
+      case 'tipo': return merged.tipo;
+      case 'descricao': return merged.descricao;
+      case 'valor': return merged.valor.toString();
+      case 'categoria': return merged.categoria;
+      case 'forma_pagamento': return merged.forma_pagamento;
+      case 'observacao': return merged.observacao || '';
+      case 'recorrente_id': return merged.recorrente_id || '';
+      case 'conta_id': return merged.conta_id || '';
+      case 'conta_destino_id': return merged.conta_destino_id || '';
+      case 'transferencia_id': return merged.transferencia_id || '';
+      case 'confirmado': return (merged.confirmado ?? false).toString();
+      default: return existingObj[h] ?? '';
+    }
+  });
 }
 
 // Update transaction
@@ -564,50 +693,55 @@ export async function updateTransaction(
   try {
     const found = await findRowIndexById(credentials.sheetsId, 'transacoes', id);
     const existingObj = mapRowToObject(found.headers, found.row);
-
-    const merged: Transaction = {
-      id,
-      data: String(transaction.data ?? existingObj.data ?? ''),
-      tipo: (transaction.tipo ?? (existingObj.tipo as Transaction['tipo'])) as Transaction['tipo'],
-      descricao: String(transaction.descricao ?? existingObj.descricao ?? ''),
-      valor: transaction.valor !== undefined ? transaction.valor : parseFloat(existingObj.valor || '0') || 0,
-      categoria: String(transaction.categoria ?? existingObj.categoria ?? ''),
-      forma_pagamento: (transaction.forma_pagamento ?? (existingObj.forma_pagamento as Transaction['forma_pagamento'])) as Transaction['forma_pagamento'],
-      observacao: (transaction.observacao ?? existingObj.observacao ?? undefined) as Transaction['observacao'],
-      recorrente_id: (transaction.recorrente_id ?? existingObj.recorrente_id ?? undefined) as Transaction['recorrente_id'],
-      conta_id: (transaction.conta_id ?? existingObj.conta_id ?? undefined) as Transaction['conta_id'],
-      conta_destino_id: (transaction.conta_destino_id ?? existingObj.conta_destino_id ?? undefined) as Transaction['conta_destino_id'],
-      transferencia_id: (transaction.transferencia_id ?? existingObj.transferencia_id ?? undefined) as Transaction['transferencia_id'],
-      confirmado:
-        transaction.confirmado !== undefined
-          ? transaction.confirmado
-          : String(existingObj.confirmado || 'false').toLowerCase() === 'true',
-    };
-
-    const row = found.headers.map((h) => {
-      switch (h) {
-        case 'id': return merged.id;
-        case 'data': return merged.data;
-        case 'tipo': return merged.tipo;
-        case 'descricao': return merged.descricao;
-        case 'valor': return merged.valor.toString();
-        case 'categoria': return merged.categoria;
-        case 'forma_pagamento': return merged.forma_pagamento;
-        case 'observacao': return merged.observacao || '';
-        case 'recorrente_id': return merged.recorrente_id || '';
-        case 'conta_id': return merged.conta_id || '';
-        case 'conta_destino_id': return merged.conta_destino_id || '';
-        case 'transferencia_id': return merged.transferencia_id || '';
-        case 'confirmado': return (merged.confirmado ?? false).toString();
-        default: return existingObj[h] ?? '';
-      }
-    });
-
+    const row = buildTransactionRow(found.headers, existingObj, id, transaction);
     await updateSheet(credentials.sheetsId, `transacoes!A${found.rowIndex0 + 2}`, [row]);
     return true;
   } catch (error) {
     devConsoleError('Error updating transaction:', error);
     return false;
+  }
+}
+
+/**
+ * Atualiza várias transações com 1 leitura + 1 escrita (values.batchUpdate), seja qual for a quantidade.
+ * Lança erro se a escrita falhar (nada é gravado parcialmente: o batchUpdate é atómico).
+ */
+export async function updateTransactionsBatch(
+  updates: Array<{ id: string; changes: Partial<Transaction> }>,
+  credentials: GoogleSheetsConfig
+): Promise<{ done: string[]; notFound: string[] }> {
+  if (updates.length === 0) return { done: [], notFound: [] };
+  try {
+    const { headers, rows, index } = indexRowsById(
+      await readSheetValues(credentials.sheetsId, 'transacoes'),
+      'transacoes',
+    );
+    const done: string[] = [];
+    const notFound: string[] = [];
+    const data: Array<{ range: string; values: string[][] }> = [];
+    for (const { id, changes } of updates) {
+      const rowIndex = index.get(id);
+      if (rowIndex === undefined) {
+        notFound.push(id);
+        continue;
+      }
+      const existingObj = mapRowToObject(headers, rows[rowIndex]);
+      data.push({
+        range: `transacoes!A${rowIndex + 2}`,
+        values: [buildTransactionRow(headers, existingObj, id, changes)],
+      });
+      done.push(id);
+    }
+    if (data.length > 0) {
+      await sheetsApi.spreadsheets.values.batchUpdate({
+        spreadsheetId: credentials.sheetsId,
+        resource: { valueInputOption: 'RAW', data },
+      });
+    }
+    return { done, notFound };
+  } catch (error) {
+    devConsoleError('Error batch updating transactions:', error);
+    throw handleGoogleApiError(error);
   }
 }
 
@@ -623,6 +757,23 @@ export async function deleteTransaction(
   } catch (error) {
     devConsoleError('Error deleting transaction:', error);
     return false;
+  }
+}
+
+/**
+ * Exclui várias transações com 1 leitura + 1 escrita (um único batchUpdate), seja qual for a quantidade.
+ * Lança erro se a escrita falhar (nada é apagado parcialmente: o batchUpdate é atómico).
+ */
+export async function deleteTransactionsBatch(
+  ids: string[],
+  credentials: GoogleSheetsConfig
+): Promise<{ done: string[]; notFound: string[] }> {
+  if (ids.length === 0) return { done: [], notFound: [] };
+  try {
+    return await deleteRowsByIds(credentials.sheetsId, 'transacoes', ids);
+  } catch (error) {
+    devConsoleError('Error batch deleting transactions:', error);
+    throw handleGoogleApiError(error);
   }
 }
 

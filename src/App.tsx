@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { FinanceProvider } from "@/contexts/FinanceContext";
 import { GoogleAuthProvider } from "@/contexts/GoogleAuthContext";
+import { SheetsQuotaNotice } from "@/components/SheetsQuotaNotice";
 import Index from "./pages/Index";
 import Transacoes from "./pages/Transacoes";
 import Categorias from "./pages/Categorias";
@@ -26,6 +27,7 @@ const App = () => (
       <FinanceProvider>
         <Toaster />
         <Sonner />
+        <SheetsQuotaNotice />
         <BrowserRouter basename={import.meta.env.BASE_URL}>
           <Routes>
             <Route path="/" element={<Index />} />
