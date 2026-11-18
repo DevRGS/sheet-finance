@@ -23,8 +23,10 @@ export default function Privacidade() {
             <p>
               Os seus registos financeiros são armazenados numa planilha Google Sheets na sua área do Google Drive. O
               operador deste projeto <strong>não</strong> recebe uma cópia desses dados num servidor próprio: a
-              comunicação é entre o seu navegador e os serviços Google, com o token de acesso mantido em memória durante
-              a sessão (não persistimos o token de acesso em armazenamento local).
+              comunicação é entre o seu navegador e os serviços Google. Para não ter de entrar de novo a cada visita, o
+              token de acesso temporário do Google (válido por cerca de 1 hora) e o email da conta ficam guardados apenas
+              no armazenamento local deste navegador; ao clicar em &quot;Desconectar&quot; são apagados. O token nunca é
+              enviado a servidores deste projeto.
             </p>
 
             <h3 className="text-foreground text-base font-semibold">Finalidade</h3>

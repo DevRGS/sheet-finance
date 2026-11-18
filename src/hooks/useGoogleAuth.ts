@@ -1,121 +1,99 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import {
   initializeGoogleAPI,
   loginWithGoogle,
   getValidToken,
-  saveAuthData,
-  getAuthData,
   clearAuthData,
-  isAuthenticated,
-  subscribeToAuthChanges,
-  applyAuthBroadcastMessage,
+  getAuthData,
+  isTokenFresh,
+  markSessionExpired,
+  subscribeToSessionChanges,
+  EXPIRY_BUFFER_MS,
+  GoogleAuthError,
   type GoogleAuthData,
 } from '@/services/googleApiService';
 
-interface GoogleAuthState {
-  isSignedIn: boolean;
-  isLoading: boolean;
-  error: string | null;
-  authData: GoogleAuthData | null;
-}
+/**
+ * - `signed_in`: token válido (restaurado do localStorage ao recarregar — sem clique).
+ * - `expired`: o token de ~1h venceu; o email é lembrado e "Reconectar" leva 1 clique, sem seletor de conta.
+ * - `signed_out`: nunca conectou neste navegador ou clicou em "Desconectar".
+ */
+export type GoogleAuthStatus = 'signed_out' | 'signed_in' | 'expired';
 
 export function useGoogleAuth() {
-  const [authState, setAuthState] = useState<GoogleAuthState>({
-    isSignedIn: false,
-    isLoading: true,
-    error: null,
-    authData: null,
-  });
+  const session = useSyncExternalStore(subscribeToSessionChanges, getAuthData);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Sem restaurar token de storage — credenciais só em memória (perdidas ao recarregar).
+  // Pré-carrega o GIS em segundo plano; a sessão restaurada não depende dele.
   useEffect(() => {
-    const init = async () => {
-      try {
-        await initializeGoogleAPI();
-        setAuthState({
-          isSignedIn: false,
-          isLoading: false,
-          error: null,
-          authData: null,
-        });
-      } catch (error) {
-        if (import.meta.env.DEV) {
-          console.error('Error initializing Google API:', error);
-        }
-        setAuthState({
-          isSignedIn: false,
-          isLoading: false,
-          error: error instanceof Error ? error.message : 'Erro ao inicializar Google API',
-          authData: null,
-        });
-      }
-    };
-
-    init();
-  }, []);
-
-  useEffect(() => {
-    const unsubscribe = subscribeToAuthChanges((msg) => {
-      applyAuthBroadcastMessage(msg);
-      if (msg?.type === 'signed_out') {
-        setAuthState((prev) => ({ ...prev, isSignedIn: false, authData: null }));
-        return;
-      }
-      if (msg?.type === 'signed_in' || msg?.type === 'updated') {
-        const authenticated = isAuthenticated();
-        setAuthState((prev) => ({
-          ...prev,
-          isSignedIn: authenticated,
-          authData: authenticated ? getAuthData() : null,
-        }));
-      }
+    initializeGoogleAPI().catch((err) => {
+      setError(err instanceof Error ? err.message : 'Erro ao carregar o login do Google');
     });
-    return unsubscribe;
   }, []);
 
-  const signIn = useCallback(async () => {
+  // Quando o token vencer, passa a "expirada" para a UI oferecer "Reconectar".
+  useEffect(() => {
+    if (!isTokenFresh(session)) {
+      if (session?.accessToken) markSessionExpired();
+      return;
+    }
+    const msUntilStale = session!.expireAt - EXPIRY_BUFFER_MS - Date.now();
+    const timer = setTimeout(markSessionExpired, Math.max(0, msUntilStale));
+
+    // Timers atrasam com o computador em suspensão: revalida ao voltar ao separador.
+    const recheck = () => {
+      if (document.visibilityState === 'visible' && !isTokenFresh(getAuthData())) markSessionExpired();
+    };
+    document.addEventListener('visibilitychange', recheck);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', recheck);
+    };
+  }, [session]);
+
+  const status: GoogleAuthStatus = !session ? 'signed_out' : isTokenFresh(session) ? 'signed_in' : 'expired';
+
+  const signIn = useCallback(async (options?: { selectAccount?: boolean }): Promise<GoogleAuthData> => {
+    setIsLoading(true);
+    setError(null);
     try {
-      setAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
-      await initializeGoogleAPI();
-      const authData = await loginWithGoogle();
-      saveAuthData(authData);
-      setAuthState({
-        isSignedIn: true,
-        isLoading: false,
-        error: null,
-        authData,
-      });
-      return authData;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer login';
-      setAuthState((prev) => ({ ...prev, isLoading: false, error: errorMessage }));
-      throw error;
+      return await loginWithGoogle(options);
+    } catch (err) {
+      // Fechar a janela é uma escolha do usuário, não um erro a destacar.
+      if (!(err instanceof GoogleAuthError && err.code === 'popup_closed')) {
+        setError(err instanceof Error ? err.message : 'Erro ao fazer login');
+      }
+      throw err;
+    } finally {
+      setIsLoading(false);
     }
   }, []);
+
+  /** Reconecta a conta lembrada (sem seletor de conta). */
+  const reconnect = useCallback(() => signIn({ selectAccount: false }), [signIn]);
+
+  /** Mostra o seletor de conta do Google. */
+  const switchAccount = useCallback(() => signIn({ selectAccount: true }), [signIn]);
 
   const signOut = useCallback(async () => {
-    try {
-      clearAuthData();
-      setAuthState({ isSignedIn: false, isLoading: false, error: null, authData: null });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer logout';
-      setAuthState((prev) => ({ ...prev, error: errorMessage }));
-    }
+    clearAuthData();
+    setError(null);
   }, []);
 
-  const getAccessToken = useCallback(async (): Promise<string> => {
-    try {
-      return await getValidToken();
-    } catch {
-      const authData = await signIn();
-      return authData.accessToken;
-    }
-  }, [signIn]);
-
   return {
-    ...authState,
+    status,
+    isSignedIn: status === 'signed_in',
+    needsReconnect: status === 'expired',
+    isLoading,
+    error,
+    /** Sessão atual (pode estar expirada — ver `status`). */
+    authData: session,
+    rememberedEmail: session?.email || null,
     signIn,
+    reconnect,
+    switchAccount,
     signOut,
-    getAccessToken,
+    getAccessToken: getValidToken,
   };
 }

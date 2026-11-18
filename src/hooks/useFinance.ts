@@ -1,9 +1,10 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Transaction, Category, Goal, TransactionFilters, GoalTransaction, BalanceData, RecurringTransaction, ForecastTransaction, Bill, Budget, BankAccount } from '@/types/finance';
 import { getMonthlyData, getCategoryData, getBalanceData, getRecurringOccurrences, getRecurringTotalsInRange } from '@/data/mockData';
 import * as sheetsService from '@/services/googleSheets';
 import { useGoogleSheetsConfig } from './useGoogleSheetsConfig';
 import { loadFinanceSnapshot, saveFinanceSnapshot } from '@/services/offlineSnapshot';
+import { isAuthenticated } from '@/services/googleApiService';
 
 // ── Dashboard Period ──────────────────────────────────────────────────────────
 
@@ -63,7 +64,15 @@ const defaultCategories: Category[] = [
 ];
 
 const MAX_AUTO_CONNECT_ATTEMPTS = 3;
-const AUTO_CONNECT_ATTEMPTS_KEY = 'auto_connect_attempts';
+/** Chave antiga: o contador persistido bloqueava a conexão automática entre recarregamentos. */
+const LEGACY_AUTO_CONNECT_ATTEMPTS_KEY = 'auto_connect_attempts';
+
+type ConnectResult = { success: boolean; message: string; retryable?: boolean };
+
+/** Erros que não se resolvem tentando de novo sozinho (precisam de ação do usuário). */
+function isPermanentConnectionError(message: string): boolean {
+  return /Acesso negado|não encontrada|Sessão|Não autenticado|permiss|Configure o ID/i.test(message);
+}
 
 // ── Skipped recurring materializations (localStorage) ────────────────────────
 
@@ -84,7 +93,7 @@ function addSkippedRecurrence(recorrenteId: string, yearMonth: string): void {
   localStorage.setItem(SKIPPED_RECURRENCES_KEY, JSON.stringify(Array.from(skipped)));
 }
 
-export function useFinance(isSignedIn = false) {
+export function useFinance(isSignedIn = false, accountEmail: string | null = null) {
   const { config, isValid } = useGoogleSheetsConfig();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>(defaultCategories);
@@ -120,7 +129,7 @@ export function useFinance(isSignedIn = false) {
     
     setIsLoading(true);
     try {
-      const [transactionsData, categoriesData, goalsData, recurringData, billsData, budgetsData, bankAccountsData] = await Promise.all([
+      const [transactionsData, categoriesData, goalsData, recurringData, billsData, budgetsData, bankAccountsData, goalTransactionsData] = await Promise.all([
         sheetsService.fetchTransactions(config),
         sheetsService.fetchCategories(config),
         sheetsService.fetchGoals(config),
@@ -128,6 +137,7 @@ export function useFinance(isSignedIn = false) {
         sheetsService.fetchBills(config),
         sheetsService.fetchBudgets(config),
         sheetsService.fetchBankAccounts(config),
+        sheetsService.fetchAllGoalTransactions(config),
       ]);
 
       // ── Materialize recurring transactions ──────────────────────────────
@@ -189,16 +199,9 @@ export function useFinance(isSignedIn = false) {
       setBudgets(budgetsData);
       setBankAccounts(bankAccountsData);
 
-      // Load all goal transactions
-      const allGoalTransactions: GoalTransaction[] = [];
-      for (const goal of goalsData) {
-        try {
-          const goalTxs = await sheetsService.fetchGoalTransactions(goal.id, config);
-          allGoalTransactions.push(...goalTxs);
-        } catch (error) {
-          console.error(`Error loading transactions for goal ${goal.id}:`, error);
-        }
-      }
+      // Goal transactions (one read of the sheet, filtered to existing goals)
+      const goalIds = new Set(goalsData.map((g) => g.id));
+      const allGoalTransactions: GoalTransaction[] = goalTransactionsData.filter((t) => goalIds.has(t.goal_id));
       setGoalTransactions(allGoalTransactions);
 
       // Persist offline snapshot (best-effort)
@@ -268,7 +271,29 @@ export function useFinance(isSignedIn = false) {
     }
   }, [isConnected, loadData]);
 
-  const connectToSheets = useCallback(async (isManual = false) => {
+  const sheetsId = isValid ? config?.sheetsId ?? null : null;
+  /** Invalida conexões em curso quando a planilha/conta muda. */
+  const connectSeqRef = useRef(0);
+  const autoConnectRef = useRef<{ key: string | null; attempts: number }>({ key: null, attempts: 0 });
+
+  useEffect(() => {
+    try {
+      localStorage.removeItem(LEGACY_AUTO_CONNECT_ATTEMPTS_KEY);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Trocar de planilha ou de conta Google exige uma nova conexão.
+  useEffect(() => {
+    connectSeqRef.current += 1;
+    autoConnectRef.current = { key: null, attempts: 0 };
+    setIsConnected(false);
+    setIsInitializing(false);
+    setConnectionError(null);
+  }, [sheetsId, accountEmail]);
+
+  const connectToSheets = useCallback(async (_isManual = false): Promise<ConnectResult> => {
     if (!config || !isValid) {
       return {
         success: false,
@@ -276,86 +301,86 @@ export function useFinance(isSignedIn = false) {
       };
     }
 
+    const seq = ++connectSeqRef.current;
+    const superseded: ConnectResult = { success: false, message: 'Conexão substituída por uma mais recente.', retryable: true };
     setIsInitializing(true);
     setConnectionError(null);
     try {
-      const testResult = await sheetsService.testConnection(config);
-      if (!testResult.success) {
-        throw new Error(testResult.message);
-      }
-
+      // initializeSpreadsheet já valida o acesso (401/403/404) — não é preciso testConnection antes.
       const initResult = await sheetsService.initializeSpreadsheet(config);
+      if (seq !== connectSeqRef.current) return superseded;
       if (!initResult.success) {
         throw new Error(initResult.message);
       }
 
       setIsConnected(true);
       setConnectionError(null);
-      localStorage.removeItem(AUTO_CONNECT_ATTEMPTS_KEY);
       return { success: true, message: 'Conexão estabelecida com sucesso!' };
     } catch (error) {
+      if (seq !== connectSeqRef.current) return superseded;
       console.error('Connection error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Erro ao conectar';
 
-      let friendlyMessage = errorMessage;
-      if (
-        errorMessage.includes('Sessão expirada') ||
-        errorMessage.includes('Não autenticado') ||
-        errorMessage.includes('Faça login')
-      ) {
-        friendlyMessage = 'Sessão do Google expirada. Clique em "Conectar com Google" para renovar o acesso.';
-      } else if (errorMessage.includes('403') || errorMessage.includes('Forbidden') || errorMessage.includes('Permission denied')) {
-        friendlyMessage = 'Acesso negado (403). Verifique se o email tem permissão de Editor na planilha.';
-      }
+      const friendlyMessage = !isAuthenticated()
+        ? 'Sessão do Google expirada. Clique em "Reconectar" para renovar o acesso.'
+        : errorMessage;
 
       setConnectionError(friendlyMessage);
-      return { success: false, message: friendlyMessage };
+      return { success: false, message: friendlyMessage, retryable: !isPermanentConnectionError(friendlyMessage) };
     } finally {
-      setIsInitializing(false);
+      if (seq === connectSeqRef.current) setIsInitializing(false);
     }
   }, [config, isValid]);
 
   const retryConnection = useCallback(() => {
-    localStorage.removeItem(AUTO_CONNECT_ATTEMPTS_KEY);
+    autoConnectRef.current = { key: sheetsId, attempts: 0 };
     setConnectionError(null);
-    // Directly trigger connection attempt
     if (config && isValid) {
       connectToSheets(true);
     }
-  }, [config, isValid, connectToSheets]);
+  }, [config, isValid, sheetsId, connectToSheets]);
 
-  // Reset connection counter whenever the user re-authenticates
+  // Ao (re)autenticar, permite novas tentativas automáticas.
   useEffect(() => {
     if (isSignedIn) {
-      const attempts = parseInt(localStorage.getItem(AUTO_CONNECT_ATTEMPTS_KEY) || '0', 10);
-      if (attempts >= MAX_AUTO_CONNECT_ATTEMPTS) {
-        localStorage.removeItem(AUTO_CONNECT_ATTEMPTS_KEY);
-        setConnectionError(null);
-      }
+      autoConnectRef.current.attempts = 0;
+      setConnectionError(null);
     }
   }, [isSignedIn]);
 
-  // Auto-connect when credentials are valid, user is signed in, and not yet connected.
+  // Reconectou depois de a sessão expirar com a planilha já conectada: recarrega os dados.
+  const wasSignedInRef = useRef(isSignedIn);
   useEffect(() => {
-    if (!config || !isValid || isConnected || isInitializing || !isSignedIn) return;
+    if (isSignedIn && !wasSignedInRef.current && isConnected) {
+      loadData();
+    }
+    wasSignedInRef.current = isSignedIn;
+  }, [isSignedIn, isConnected, loadData]);
 
-    const attempts = parseInt(localStorage.getItem(AUTO_CONNECT_ATTEMPTS_KEY) || '0', 10);
-    if (attempts >= MAX_AUTO_CONNECT_ATTEMPTS) return;
+  // Conexão automática: logo ao abrir (sessão restaurada) ou após o login.
+  // Erros transitórios (rede, 429, 5xx) tentam de novo com espera crescente; erros de
+  // permissão/sessão param e mostram a mensagem com "Tentar novamente".
+  useEffect(() => {
+    if (!sheetsId || !isSignedIn || isConnected || isInitializing) return;
 
+    const state = autoConnectRef.current;
+    if (state.key !== sheetsId) {
+      state.key = sheetsId;
+      state.attempts = 0;
+    }
+    if (state.attempts >= MAX_AUTO_CONNECT_ATTEMPTS) return;
+
+    const delay = state.attempts === 0 ? 0 : 1500 * 2 ** (state.attempts - 1);
     const timer = setTimeout(() => {
+      if (state.attempts >= MAX_AUTO_CONNECT_ATTEMPTS) return;
+      state.attempts += 1;
       connectToSheets(false).then((result) => {
-        if (!result.success) {
-          const newAttempts = attempts + 1;
-          localStorage.setItem(AUTO_CONNECT_ATTEMPTS_KEY, newAttempts.toString());
-        }
-      }).catch(() => {
-        const newAttempts = attempts + 1;
-        localStorage.setItem(AUTO_CONNECT_ATTEMPTS_KEY, newAttempts.toString());
+        if (!result.success && !result.retryable) state.attempts = MAX_AUTO_CONNECT_ATTEMPTS;
       });
-    }, 800);
+    }, delay);
 
     return () => clearTimeout(timer);
-  }, [config, isValid, isConnected, isInitializing, isSignedIn, connectToSheets]);
+  }, [sheetsId, isSignedIn, isConnected, isInitializing, connectToSheets]);
 
   const addTransaction = useCallback(async (transaction: Omit<Transaction, 'id'>): Promise<boolean> => {
     const tempId = `temp_${crypto.randomUUID()}`;

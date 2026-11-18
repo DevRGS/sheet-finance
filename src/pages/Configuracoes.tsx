@@ -4,7 +4,7 @@ import {
   Loader2, CheckCircle2, XCircle, RefreshCw, Database, Cloud,
   AlertTriangle, Plus, FileSpreadsheet, Sun, Moon,
   ArrowRightLeft, Tags, Target, Landmark, PiggyBank, Settings2,
-  Layers, Info,
+  Layers, Info, LogOut, Users,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { AppHeader } from '@/components/layout/AppHeader';
@@ -18,6 +18,7 @@ import { useFinanceContext } from '@/contexts/FinanceContext';
 import { useGoogleSheetsConfig } from '@/hooks/useGoogleSheetsConfig';
 import { useGoogleAuthContext } from '@/contexts/GoogleAuthContext';
 import { listSpreadsheets, createSpreadsheet, SpreadsheetItem } from '@/services/googleSheetsGapi';
+import { GoogleAuthError, type GoogleAuthData } from '@/services/googleApiService';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { extractSpreadsheetId } from '@/lib/spreadsheetId';
@@ -25,7 +26,6 @@ import { hasGoogleConnectConsent, setGoogleConnectConsent } from '@/lib/privacyC
 import { PrivacyConsentDialog } from '@/components/privacy/PrivacyConsentDialog';
 
 const FLUXIO_FINANCE_NAME = 'FluxioFinance';
-const AUTO_CONNECT_KEY = 'auto_connect_attempts';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Appearance card
@@ -116,8 +116,18 @@ const SYNCED_SHEETS = [
 const Configuracoes = () => {
   const { isConnected, isInitializing, connectionError, retryConnection } = useFinanceContext();
   const { config, saveConfig, isValid } = useGoogleSheetsConfig();
-  const { isSignedIn, isLoading: authLoading, signIn, signOut, error: authError, authData } =
-    useGoogleAuthContext();
+  const {
+    status: authStatus,
+    isSignedIn,
+    needsReconnect,
+    isLoading: authLoading,
+    signIn,
+    reconnect,
+    switchAccount,
+    signOut,
+    error: authError,
+    authData,
+  } = useGoogleAuthContext();
 
   const [spreadsheets, setSpreadsheets] = useState<SpreadsheetItem[]>([]);
   const [isLoadingSheets, setIsLoadingSheets] = useState(false);
@@ -149,11 +159,14 @@ const Configuracoes = () => {
   }, [isSignedIn]);
 
   const handleSelectSpreadsheet = (id: string) => {
+    if (config?.sheetsId === id) {
+      toast.info(isConnected ? 'Esta planilha já está conectada.' : 'Esta planilha já está selecionada.');
+      return;
+    }
     const currentConfig = config || { isConnected: false };
     const saved = saveConfig({ ...currentConfig, sheetsId: id, isConnected: false });
     if (saved) {
-      localStorage.removeItem(AUTO_CONNECT_KEY);
-      toast.success('Planilha selecionada! Inicializando e carregando dados...');
+      toast.success('Planilha selecionada! Conectando e carregando dados...');
     }
   };
 
@@ -176,7 +189,6 @@ const Configuracoes = () => {
       await handleLoadSpreadsheets();
       const currentConfig = config || { isConnected: false };
       saveConfig({ ...currentConfig, sheetsId: spreadsheetId, isConnected: false });
-      localStorage.removeItem(AUTO_CONNECT_KEY);
       toast.success(`Planilha "${FLUXIO_FINANCE_NAME}" criada! Inicializando estrutura...`);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Erro ao criar planilha';
@@ -187,11 +199,19 @@ const Configuracoes = () => {
     }
   };
 
-  const runSignIn = async () => {
+  /**
+   * A janela do Google tem de abrir no mesmo clique (senão o navegador bloqueia o pop-up),
+   * por isso `action()` é chamado antes de qualquer `await`.
+   */
+  const runAuth = async (action: () => Promise<GoogleAuthData>) => {
     try {
-      const result = await signIn();
-      toast.success(`Conectado como ${result.email}`);
+      const result = await action();
+      toast.success(result.email ? `Conectado como ${result.email}` : 'Conta Google conectada');
     } catch (error) {
+      if (error instanceof GoogleAuthError && error.code === 'popup_closed') {
+        toast.info('Login cancelado — a janela do Google foi fechada.');
+        return;
+      }
       toast.error(error instanceof Error ? error.message : 'Erro ao conectar com Google');
     }
   };
@@ -201,13 +221,16 @@ const Configuracoes = () => {
       setPrivacyDialogOpen(true);
       return;
     }
-    await runSignIn();
+    await runAuth(() => signIn());
   };
 
   const handlePrivacyAcceptAndConnect = async () => {
     setGoogleConnectConsent();
-    await runSignIn();
+    await runAuth(() => signIn());
   };
+
+  const handleReconnect = () => runAuth(reconnect);
+  const handleSwitchAccount = () => runAuth(switchAccount);
 
   const handleSignOut = async () => {
     try {
@@ -248,12 +271,27 @@ const Configuracoes = () => {
 
             {/* Auth section */}
             <div className="space-y-3">
-              {isSignedIn && authData ? (
+              {authStatus === 'signed_in' ? (
                 <Alert className="border-emerald-500/40 bg-emerald-500/5">
                   <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                   <AlertTitle className="text-emerald-700 dark:text-emerald-400">Conta conectada</AlertTitle>
                   <AlertDescription>
-                    Autenticado como <strong>{authData.email}</strong>
+                    Autenticado como <strong>{authData?.email || 'conta Google'}</strong>. O acesso fica salvo neste
+                    navegador: ao voltar, a conexão é automática.
+                  </AlertDescription>
+                </Alert>
+              ) : authStatus === 'expired' ? (
+                <Alert className="border-amber-500/50 bg-amber-500/10">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <AlertTitle className="text-amber-700 dark:text-amber-400">Sessão expirada</AlertTitle>
+                  <AlertDescription>
+                    Por segurança, o Google limita cada acesso a cerca de 1 hora. Clique em <strong>Reconectar</strong>
+                    {authData?.email ? (
+                      <>
+                        {' '}para continuar como <strong>{authData.email}</strong>
+                      </>
+                    ) : null}
+                    {' '}— não é preciso escolher a conta de novo.
                   </AlertDescription>
                 </Alert>
               ) : (
@@ -262,7 +300,8 @@ const Configuracoes = () => {
                   <AlertTitle>Autorização necessária</AlertTitle>
                   <AlertDescription>
                     Conecte sua conta Google para criar ou associar uma planilha. O acesso ao Drive é restrito ao
-                    necessário (sem leitura ampla dos seus ficheiros).
+                    necessário (sem leitura ampla dos seus ficheiros). Depois do primeiro acesso, a conexão fica salva
+                    neste navegador.
                   </AlertDescription>
                 </Alert>
               )}
@@ -275,11 +314,34 @@ const Configuracoes = () => {
                 </Alert>
               )}
 
-              {isSignedIn ? (
-                <Button onClick={handleSignOut} variant="outline" className="w-full gap-2" disabled={authLoading}>
-                  {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                  Desconectar conta Google
-                </Button>
+              {authStatus === 'signed_in' ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Button onClick={handleSwitchAccount} variant="outline" className="w-full gap-2" disabled={authLoading}>
+                    {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
+                    Trocar conta
+                  </Button>
+                  <Button onClick={handleSignOut} variant="outline" className="w-full gap-2" disabled={authLoading}>
+                    <LogOut className="h-4 w-4" />
+                    Desconectar
+                  </Button>
+                </div>
+              ) : authStatus === 'expired' ? (
+                <div className="space-y-2">
+                  <Button onClick={handleReconnect} className="w-full gap-2" disabled={authLoading}>
+                    {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                    Reconectar
+                  </Button>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Button onClick={handleSwitchAccount} variant="ghost" size="sm" className="w-full gap-2" disabled={authLoading}>
+                      <Users className="h-4 w-4" />
+                      Usar outra conta
+                    </Button>
+                    <Button onClick={handleSignOut} variant="ghost" size="sm" className="w-full gap-2" disabled={authLoading}>
+                      <XCircle className="h-4 w-4" />
+                      Desconectar
+                    </Button>
+                  </div>
+                </div>
               ) : (
                 <Button onClick={handleSignIn} className="w-full gap-2" disabled={authLoading}>
                   {authLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
@@ -420,9 +482,9 @@ const Configuracoes = () => {
             {isInitializing ? (
               <Alert>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <AlertTitle>Inicializando planilha…</AlertTitle>
+                <AlertTitle>Conectando à planilha…</AlertTitle>
                 <AlertDescription>
-                  Verificando estrutura e criando as abas necessárias. Isso pode levar alguns segundos.
+                  Verificando o acesso e a estrutura das abas. Na primeira conexão isso pode levar alguns segundos.
                 </AlertDescription>
               </Alert>
             ) : isConnected ? (
@@ -439,15 +501,17 @@ const Configuracoes = () => {
                 <AlertTitle>Falha na conexão</AlertTitle>
                 <AlertDescription className="space-y-2">
                   <p>{connectionError}</p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => { retryConnection(); }}
-                    className="mt-2 gap-2 border-destructive/50 hover:bg-destructive/10"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Tentar novamente
-                  </Button>
+                  {isSignedIn && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { retryConnection(); }}
+                      className="mt-2 gap-2 border-destructive/50 hover:bg-destructive/10"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Tentar novamente
+                    </Button>
+                  )}
                 </AlertDescription>
               </Alert>
             ) : isValid && isSignedIn ? (
@@ -456,6 +520,15 @@ const Configuracoes = () => {
                 <AlertTitle>Conectando automaticamente…</AlertTitle>
                 <AlertDescription>
                   Estabelecendo conexão com a planilha selecionada.
+                </AlertDescription>
+              </Alert>
+            ) : isValid && needsReconnect ? (
+              <Alert>
+                <Cloud className="h-4 w-4" />
+                <AlertTitle>Planilha configurada</AlertTitle>
+                <AlertDescription>
+                  Reconecte sua conta Google para voltar a sincronizar. Enquanto isso, os dados salvos neste
+                  navegador continuam visíveis.
                 </AlertDescription>
               </Alert>
             ) : (

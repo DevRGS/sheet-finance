@@ -135,7 +135,7 @@ A aplicação estará disponível em `http://localhost:8080` (porta definida em 
 
 ### Como funciona (sem servidor de dados, sem APIs pagas obrigatórias)
 
-A app usa **Google Identity Services** no navegador e chama a **Google Sheets API** (e o necessário do Drive) com o **access token** do utilizador. O token é mantido **apenas em memória** durante a sessão do separador; não é gravado em `localStorage` nem em `sessionStorage`. O **ID da planilha** e preferências (tema, regras de importação, consentimento de privacidade) podem ficar no armazenamento local — não são credenciais OAuth.
+A app usa **Google Identity Services** no navegador e chama a **Google Sheets API** (e o necessário do Drive) com o **access token** do utilizador. Para manter o login entre visitas, o **access token** (válido ~1 h) e o email da conta ficam no `localStorage` deste navegador (chave `fluxio_google_session_v1`); "Desconectar" apaga-os. O **ID da planilha** e preferências (tema, regras de importação, consentimento de privacidade) também ficam no armazenamento local.
 
 Variável opcional:
 
@@ -163,7 +163,7 @@ Copie `.env.example` para `.env` e preencha se usar o seu próprio cliente OAuth
 4. Associe uma planilha: **crie uma nova** com o botão, **cole o ID ou URL** de uma planilha sua, ou use **Carregar lista** para ver planilhas já ligadas a esta app (permissão `drive.file`).
 5. Ao guardar o ID, o app **inicializa automaticamente** as abas necessárias na planilha.
 
-**Nota:** Após recarregar a página, será necessário voltar a **Conectar com Google** (a sessão OAuth não é persistida em disco, por desenho).
+**Sessão:** ao recarregar a página dentro da validade do token (~1 h), a conexão é restaurada automaticamente, sem clique. Depois disso (o Google não emite refresh token para apps sem servidor), aparece **Reconectar**: 1 clique, sem escolher a conta de novo. Se o token vencer enquanto usa a app, a primeira ação de gravação renova-o sozinha.
 
 A aplicação criará automaticamente as abas necessárias na planilha:
 - `config` - Configurações do sistema
@@ -288,7 +288,7 @@ sheet-finance/
 │   ├── hooks/             # Custom hooks
 │   ├── pages/             # Páginas (incl. Privacidade, Dados)
 │   ├── services/          # Serviços (Google API, Sheets)
-│   ├── services/google/   # Sessão OAuth em memória
+│   ├── services/google/   # Sessão OAuth (localStorage) e cliente REST da Sheets API
 │   ├── types/             # Definições TypeScript
 │   └── lib/               # Utilitários
 ├── index.html             # HTML principal
@@ -309,7 +309,7 @@ Todos os componentes se adaptam automaticamente ao tamanho da tela, proporcionan
 
 ## 🔒 Segurança e privacidade
 
-- **Token OAuth:** mantido só em **memória** (perde-se ao fechar o separador ou recarregar). Não há `access_token` em `localStorage`/`sessionStorage`.
+- **Token OAuth:** access token de curta duração (~1 h) guardado no `localStorage` deste navegador para manter o login; nunca sai do navegador exceto para as APIs Google. "Desconectar" apaga-o. Não há refresh token.
 - **Dados financeiros:** ficam na **sua** Google Sheets; o autor do repositório **não** recebe uma cópia num backend deste projeto (alojamento estático só distribui HTML/JS/CSS públicos).
 - **O que pode ficar localmente:** ID da planilha (`google_sheets_config`), tema, regras de importação, contadores de onboarding, registo de aceitação da política (versão) — itens não sensíveis.
 - **Limitações de uma SPA:** o `client_id` é público; qualquer proteção forte de segredos exigiria backend. Confie na origem do site que visita (ex.: GitHub Pages do repositório oficial).

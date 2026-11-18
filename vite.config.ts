@@ -65,11 +65,12 @@ function cspProductionMeta(): Plugin {
   const csp = [
     "default-src 'self'",
     "base-uri 'self'",
-    "script-src 'self' https://apis.google.com https://accounts.google.com https://www.gstatic.com",
-    "connect-src 'self' https://www.googleapis.com https://content.googleapis.com https://oauth2.googleapis.com https://accounts.google.com",
+    "script-src 'self' https://accounts.google.com https://www.gstatic.com",
+    // sheets.googleapis.com: Sheets API v4 (fetch). www.googleapis.com: Drive (lista) + userinfo.
+    "connect-src 'self' https://sheets.googleapis.com https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com",
     "frame-src https://accounts.google.com",
     "img-src 'self' data: https:",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
     "font-src 'self' data:",
   ].join("; ");
 

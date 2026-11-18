@@ -1,14 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Transaction, Category, Goal, GoogleSheetsConfig, GoalTransaction, RecurringTransaction, Bill, ForecastTransaction, Budget, BankAccount } from '@/types/finance';
 
-import { getValidToken } from './googleApiService';
+import { getValidToken, GoogleAuthError, markSessionExpired } from './googleApiService';
+import { sheetsApi } from './google/sheetsRestClient';
 import { devError, devConsoleError, devConsoleWarn } from '@/lib/logger';
-
-declare global {
-  interface Window {
-    gapi: any;
-  }
-}
 
 // Helper to get access token using Google API Service
 async function getAccessToken(): Promise<string> {
@@ -17,13 +12,18 @@ async function getAccessToken(): Promise<string> {
 
 // Helper to handle Google API errors and provide user-friendly messages
 function handleGoogleApiError(error: any): Error {
+  // Sessão expirada / não autenticado: manter a mensagem e o código originais
+  if (error instanceof GoogleAuthError) {
+    return error;
+  }
+
   devError('Google API', {
     status: error?.status,
     code: error?.result?.error?.code,
     message: error?.result?.error?.message || error?.message,
   });
 
-  // Check for 403 Forbidden error - multiple ways gapi can return this
+  // Check for 403 Forbidden error
   const status = error?.status || error?.result?.error?.code;
   const message = error?.result?.error?.message || error?.message || '';
   const statusText = error?.statusText || '';
@@ -37,9 +37,10 @@ function handleGoogleApiError(error: any): Error {
     return new Error('Planilha não encontrada (404). Verifique se o ID da planilha está correto.');
   }
   
-  // Check for authentication errors
+  // Check for authentication errors (token revogado ou vencido no servidor)
   if (status === 401 || message.includes('401') || message.includes('Unauthorized') || message.includes('Invalid credentials')) {
-    return new Error('Não autenticado. Faça login com Google primeiro.');
+    markSessionExpired();
+    return new GoogleAuthError('expired', 'Sessão do Google expirada. Clique em "Reconectar" para continuar.');
   }
   
   // Check for rate limiting (429)
@@ -57,62 +58,20 @@ function handleGoogleApiError(error: any): Error {
   return new Error(errorMessage);
 }
 
-// Helper to ensure gapi is ready
+/**
+ * Garante um token válido antes de cada operação (renova sem UI se houver gesto recente
+ * do usuário; caso contrário lança GoogleAuthError 'expired').
+ */
 async function ensureGapiReady(): Promise<void> {
-  // Wait for gapi to load
-  if (!window.gapi) {
-    // Wait up to 10 seconds for gapi to load
-    await new Promise<void>((resolve, reject) => {
-      const checkGapi = setInterval(() => {
-        if (window.gapi) {
-          clearInterval(checkGapi);
-          clearTimeout(timeout);
-          resolve();
-        }
-      }, 100);
-      
-      const timeout = setTimeout(() => {
-        clearInterval(checkGapi);
-        reject(new Error('Google API não carregada. Aguarde o carregamento da biblioteca.'));
-      }, 10000);
-    });
-  }
-  
-  // Load client library
-  if (!window.gapi.client) {
-    await new Promise<void>((resolve, reject) => {
-      window.gapi.load('client', {
-        callback: resolve,
-        onerror: reject,
-      });
-    });
-  }
-  
-  // Load Sheets API
-  if (!window.gapi.client.sheets) {
-    await window.gapi.client.load('https://sheets.googleapis.com/$discovery/rest?version=v4');
-  }
-  
-  // Get and set access token for gapi requests
-  try {
-    const accessToken = await getAccessToken();
-    if (!accessToken) {
-      throw new Error('Token de acesso não disponível');
-    }
-    window.gapi.client.setToken({ access_token: accessToken });
-  } catch (error) {
-    // If token is not available, throw a more helpful error
-    const errorMessage = error instanceof Error ? error.message : 'Erro ao obter token';
-    throw new Error(`Não autenticado. Faça login com Google primeiro através do botão "Conectar com Google". Erro: ${errorMessage}`);
-  }
+  await getAccessToken();
 }
 
-// Read sheet data using gapi
+// Read sheet data via Sheets API
 async function readSheet(sheetsId: string, range: string): Promise<Record<string, unknown>[]> {
   await ensureGapiReady();
 
   try {
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
+    const response = await sheetsApi.spreadsheets.values.get({
       spreadsheetId: sheetsId,
       range: range,
     });
@@ -140,7 +99,7 @@ async function readSheet(sheetsId: string, range: string): Promise<Record<string
 async function readSheetValues(sheetsId: string, sheetName: string): Promise<string[][]> {
   await ensureGapiReady();
   try {
-    const response = await window.gapi.client.sheets.spreadsheets.values.get({
+    const response = await sheetsApi.spreadsheets.values.get({
       spreadsheetId: sheetsId,
       range: sheetName,
     });
@@ -185,12 +144,12 @@ async function findRowIndexById(
   return { rowIndex0, headers: headers as string[], row: rows[rowIndex0] as string[] };
 }
 
-// Append to sheet using gapi
+// Append to sheet via Sheets API
 async function appendToSheet(sheetsId: string, range: string, values: string[][]): Promise<void> {
   await ensureGapiReady();
 
   try {
-    await window.gapi.client.sheets.spreadsheets.values.append({
+    await sheetsApi.spreadsheets.values.append({
       spreadsheetId: sheetsId,
       range: range,
       valueInputOption: 'RAW',
@@ -205,12 +164,12 @@ async function appendToSheet(sheetsId: string, range: string, values: string[][]
   }
 }
 
-// Update sheet using gapi
+// Update sheet via Sheets API
 async function updateSheet(sheetsId: string, range: string, values: string[][]): Promise<void> {
   await ensureGapiReady();
 
   try {
-    await window.gapi.client.sheets.spreadsheets.values.update({
+    await sheetsApi.spreadsheets.values.update({
       spreadsheetId: sheetsId,
       range: range,
       valueInputOption: 'RAW',
@@ -224,13 +183,13 @@ async function updateSheet(sheetsId: string, range: string, values: string[][]):
   }
 }
 
-// Delete row from sheet using gapi
+// Delete row from sheet via Sheets API
 async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number): Promise<void> {
   await ensureGapiReady();
 
   try {
     // Get sheet ID
-    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({
+    const spreadsheet = await sheetsApi.spreadsheets.get({
       spreadsheetId: sheetsId,
     });
 
@@ -242,7 +201,7 @@ async function deleteRow(sheetsId: string, sheetName: string, rowIndex: number):
       throw new Error(`Sheet ${sheetName} not found`);
     }
 
-    await window.gapi.client.sheets.spreadsheets.batchUpdate({
+    await sheetsApi.spreadsheets.batchUpdate({
       spreadsheetId: sheetsId,
       resource: {
         requests: [{
@@ -293,6 +252,10 @@ export async function listSpreadsheets(): Promise<SpreadsheetItem[]> {
   );
 
   if (!response.ok) {
+    if (response.status === 401) {
+      markSessionExpired();
+      throw new GoogleAuthError('expired', 'Sessão do Google expirada. Clique em "Reconectar" para continuar.');
+    }
     const errorData = await response.json().catch(() => ({}));
     const message = errorData?.error?.message || `Erro ${response.status}`;
     throw new Error(`Erro ao listar planilhas: ${message}`);
@@ -306,7 +269,7 @@ export async function listSpreadsheets(): Promise<SpreadsheetItem[]> {
 export async function createSpreadsheet(name: string): Promise<string> {
   await ensureGapiReady();
 
-  const response = await window.gapi.client.sheets.spreadsheets.create({
+  const response = await sheetsApi.spreadsheets.create({
     resource: {
       properties: {
         title: name,
@@ -327,8 +290,9 @@ export async function testConnection(credentials: GoogleSheetsConfig): Promise<{
   try {
     await ensureGapiReady();
 
-    await window.gapi.client.sheets.spreadsheets.get({
+    await sheetsApi.spreadsheets.get({
       spreadsheetId: credentials.sheetsId,
+      fields: 'spreadsheetId',
     });
 
     return { success: true, message: 'Conexão estabelecida com sucesso!' };
@@ -338,37 +302,69 @@ export async function testConnection(credentials: GoogleSheetsConfig): Promise<{
   }
 }
 
-// Initialize spreadsheet
+const REQUIRED_SHEETS = [
+  { name: 'config', headers: ['chave', 'valor'] },
+  { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao', 'recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado'] },
+  { name: 'categorias', headers: ['id', 'nome', 'cor', 'tipo'] },
+  { name: 'metas', headers: ['id', 'nome', 'valor_alvo', 'valor_atual', 'prazo', 'cor'] },
+  { name: 'movimentacoes_metas', headers: ['id', 'goal_id', 'tipo', 'valor', 'data', 'observacao'] },
+  { name: 'transacoes_recorrentes', headers: ['id', 'descricao', 'tipo', 'valor', 'categoria', 'forma_pagamento', 'data_inicio', 'recorrencia', 'fim_tipo', 'meses_duracao', 'ativo', 'observacao'] },
+  { name: 'contas', headers: ['id', 'tipo', 'descricao', 'valor', 'categoria', 'data_vencimento', 'data_pagamento', 'pago', 'observacao'] },
+  { name: 'orcamentos', headers: ['id', 'categoria', 'valor_limite', 'mes'] },
+  { name: 'contas_bancarias', headers: ['id', 'nome', 'tipo', 'banco', 'saldo_inicial', 'cor', 'ativo'] },
+];
+
+/**
+ * Versão da estrutura (abas/colunas/seeds). Ao mudar REQUIRED_SHEETS ou as migrações abaixo,
+ * incremente para forçar a verificação completa em todas as planilhas.
+ */
+const SCHEMA_VERSION = '2';
+const schemaCacheKey = (sheetsId: string) => `fluxio_sheet_schema:${sheetsId}`;
+
+function isSchemaUpToDate(sheetsId: string): boolean {
+  try {
+    return localStorage.getItem(schemaCacheKey(sheetsId)) === SCHEMA_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+function markSchemaUpToDate(sheetsId: string): void {
+  try {
+    localStorage.setItem(schemaCacheKey(sheetsId), SCHEMA_VERSION);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Valida o acesso e garante a estrutura da planilha.
+ * Caminho rápido: se todas as abas existem e esta planilha já foi verificada neste navegador
+ * com a versão atual do esquema, faz apenas 1 requisição (lista de abas).
+ */
 export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Promise<{ success: boolean; message: string }> {
   try {
     await ensureGapiReady();
 
-    // Get existing sheets
-    const spreadsheet = await window.gapi.client.sheets.spreadsheets.get({
+    // Get existing sheets (também valida acesso: 401/403/404 caem no catch)
+    const spreadsheet = await sheetsApi.spreadsheets.get({
       spreadsheetId: credentials.sheetsId,
+      fields: 'sheets.properties.title',
     });
 
-    const existingSheets = spreadsheet.result.sheets?.map((s: any) => s.properties.title) || [];
+    const existingSheets: string[] = spreadsheet.result.sheets?.map((s: any) => s.properties.title) || [];
+    const sheetsToCreate = REQUIRED_SHEETS.filter(s => !existingSheets.includes(s.name));
 
-    // Create missing sheets
-    const requiredSheets = [
-      { name: 'config', headers: ['chave', 'valor'] },
-      { name: 'transacoes', headers: ['id', 'data', 'tipo', 'descricao', 'valor', 'categoria', 'forma_pagamento', 'observacao', 'recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado'] },
-      { name: 'categorias', headers: ['id', 'nome', 'cor', 'tipo'] },
-      { name: 'metas', headers: ['id', 'nome', 'valor_alvo', 'valor_atual', 'prazo', 'cor'] },
-      { name: 'movimentacoes_metas', headers: ['id', 'goal_id', 'tipo', 'valor', 'data', 'observacao'] },
-      { name: 'transacoes_recorrentes', headers: ['id', 'descricao', 'tipo', 'valor', 'categoria', 'forma_pagamento', 'data_inicio', 'recorrencia', 'fim_tipo', 'meses_duracao', 'ativo', 'observacao'] },
-      { name: 'contas', headers: ['id', 'tipo', 'descricao', 'valor', 'categoria', 'data_vencimento', 'data_pagamento', 'pago', 'observacao'] },
-      { name: 'orcamentos', headers: ['id', 'categoria', 'valor_limite', 'mes'] },
-      { name: 'contas_bancarias', headers: ['id', 'nome', 'tipo', 'banco', 'saldo_inicial', 'cor', 'ativo'] },
-    ];
+    if (sheetsToCreate.length === 0 && isSchemaUpToDate(credentials.sheetsId)) {
+      return { success: true, message: 'Conexão estabelecida com sucesso!' };
+    }
 
-    const sheetsToCreate = requiredSheets.filter(s => !existingSheets.includes(s.name));
+    let fullyVerified = true;
 
     // Create missing sheets (non-critical — wrapped so a failure here doesn't block access)
     if (sheetsToCreate.length > 0) {
       try {
-        await window.gapi.client.sheets.spreadsheets.batchUpdate({
+        await sheetsApi.spreadsheets.batchUpdate({
           spreadsheetId: credentials.sheetsId,
           resource: {
             requests: sheetsToCreate.map(sheet => ({
@@ -376,16 +372,22 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
             })),
           },
         });
-        // Add headers to newly created sheets
-        for (const sheet of sheetsToCreate) {
-          try {
-            await appendToSheet(credentials.sheetsId, `${sheet.name}!A1`, [sheet.headers]);
-          } catch (headerErr) {
-            devConsoleWarn(`Could not add header to ${sheet.name}:`, headerErr);
-          }
+        // Add headers to all newly created sheets in a single request
+        try {
+          await sheetsApi.spreadsheets.values.batchUpdate({
+            spreadsheetId: credentials.sheetsId,
+            resource: {
+              valueInputOption: 'RAW',
+              data: sheetsToCreate.map(sheet => ({ range: `${sheet.name}!A1`, values: [sheet.headers] })),
+            },
+          });
+        } catch (headerErr) {
+          fullyVerified = false;
+          devConsoleWarn('Could not add headers to new sheets:', headerErr);
         }
       } catch (createErr: any) {
         // If sheets already exist (concurrent init) or another non-fatal error, continue
+        fullyVerified = false;
         const msg: string = createErr?.result?.error?.message || createErr?.message || '';
         if (!msg.includes('already exists')) {
           devConsoleWarn('Could not create new sheets (non-fatal):', createErr);
@@ -393,45 +395,30 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
       }
     }
 
-    // Migrate transacoes header columns if missing
-    if (existingSheets.includes('transacoes')) {
+    // Migrate header columns if missing (only for sheets that already existed)
+    const migrations: Array<{ sheet: string; columns: string[] }> = [
+      { sheet: 'transacoes', columns: ['recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado'] },
+      { sheet: 'categorias', columns: ['tipo'] },
+    ];
+    for (const { sheet, columns } of migrations) {
+      if (!existingSheets.includes(sheet)) continue;
       try {
-        const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
+        const headerRes = await sheetsApi.spreadsheets.values.get({
           spreadsheetId: credentials.sheetsId,
-          range: 'transacoes!1:1',
+          range: `${sheet}!1:1`,
         });
         let headers: string[] = headerRes.result.values?.[0] || [];
         let changed = false;
-        for (const col of ['recorrente_id', 'conta_id', 'conta_destino_id', 'transferencia_id', 'confirmado']) {
+        for (const col of columns) {
           if (headers.length > 0 && !headers.includes(col)) {
             headers = [...headers, col];
             changed = true;
           }
         }
-        if (changed) await updateSheet(credentials.sheetsId, 'transacoes!A1', [headers]);
+        if (changed) await updateSheet(credentials.sheetsId, `${sheet}!A1`, [headers]);
       } catch (e) {
-        devConsoleWarn('Could not migrate transacoes header:', e);
-      }
-    }
-
-    // Migrate categorias header columns if missing
-    if (existingSheets.includes('categorias')) {
-      try {
-        const headerRes = await window.gapi.client.sheets.spreadsheets.values.get({
-          spreadsheetId: credentials.sheetsId,
-          range: 'categorias!1:1',
-        });
-        let headers: string[] = headerRes.result.values?.[0] || [];
-        let changed = false;
-        for (const col of ['tipo']) {
-          if (headers.length > 0 && !headers.includes(col)) {
-            headers = [...headers, col];
-            changed = true;
-          }
-        }
-        if (changed) await updateSheet(credentials.sheetsId, 'categorias!A1', [headers]);
-      } catch (e) {
-        devConsoleWarn('Could not migrate categorias header:', e);
+        fullyVerified = false;
+        devConsoleWarn(`Could not migrate ${sheet} header:`, e);
       }
     }
 
@@ -455,6 +442,7 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         await appendToSheet(credentials.sheetsId, 'categorias!A2', defaultCategories);
       }
     } catch (e) {
+      fullyVerified = false;
       devConsoleWarn('Could not seed categories:', e);
     }
 
@@ -468,8 +456,11 @@ export async function initializeSpreadsheet(credentials: GoogleSheetsConfig): Pr
         ]);
       }
     } catch (e) {
+      fullyVerified = false;
       devConsoleWarn('Could not seed config:', e);
     }
+
+    if (fullyVerified) markSchemaUpToDate(credentials.sheetsId);
 
     return { success: true, message: 'Planilha inicializada com sucesso!' };
   } catch (error: any) {
@@ -857,35 +848,43 @@ export async function deleteGoal(
   }
 }
 
+function parseGoalTransactionRow(row: Record<string, unknown>): GoalTransaction {
+  return {
+    id: String(row.id || ''),
+    goal_id: String(row.goal_id || ''),
+    tipo: row.tipo as GoalTransaction['tipo'],
+    valor: parseFloat(String(row.valor || '0')) || 0,
+    data: String(row.data || ''),
+    observacao: String(row.observacao || ''),
+  };
+}
+
+function sortGoalTransactionsDesc(list: GoalTransaction[]): GoalTransaction[] {
+  const parseDate = (dateStr: string) => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  };
+  return list.sort((a, b) => parseDate(b.data).getTime() - parseDate(a.data).getTime());
+}
+
+// Fetch all goal transactions (single read of the sheet, for every goal)
+export async function fetchAllGoalTransactions(credentials: GoogleSheetsConfig): Promise<GoalTransaction[]> {
+  try {
+    const data = await readSheet(credentials.sheetsId, 'movimentacoes_metas');
+    return sortGoalTransactionsDesc(data.map(parseGoalTransactionRow));
+  } catch (error) {
+    devConsoleError('Error fetching goal transactions:', error);
+    return [];
+  }
+}
+
 // Fetch goal transactions
 export async function fetchGoalTransactions(
   goalId: string,
   credentials: GoogleSheetsConfig
 ): Promise<GoalTransaction[]> {
-  try {
-    const data = await readSheet(credentials.sheetsId, 'movimentacoes_metas');
-    
-    return data
-      .filter(row => String(row.goal_id) === goalId)
-      .map(row => ({
-        id: String(row.id || ''),
-        goal_id: String(row.goal_id || ''),
-        tipo: row.tipo as GoalTransaction['tipo'],
-        valor: parseFloat(String(row.valor || '0')) || 0,
-        data: String(row.data || ''),
-        observacao: String(row.observacao || ''),
-      }))
-      .sort((a, b) => {
-        const parseDate = (dateStr: string) => {
-          const [year, month, day] = dateStr.split('-').map(Number);
-          return new Date(year, month - 1, day);
-        };
-        return parseDate(b.data).getTime() - parseDate(a.data).getTime();
-      });
-  } catch (error) {
-    devConsoleError('Error fetching goal transactions:', error);
-    return [];
-  }
+  const all = await fetchAllGoalTransactions(credentials);
+  return all.filter((t) => t.goal_id === goalId);
 }
 
 // Add goal transaction

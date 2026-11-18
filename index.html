@@ -19,9 +19,8 @@
     <link rel="icon" type="image/png" href="__FAVICON_HREF__" />
     <link rel="canonical" href="/" />
     
-    <!-- Google API Client Library -->
-    <script src="https://apis.google.com/js/api.js"></script>
-    <script src="https://accounts.google.com/gsi/client"></script>
+    <!-- Google Identity Services (login OAuth). A Sheets API é chamada via fetch — sem gapi/api.js. -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
     <div id="root"></div>

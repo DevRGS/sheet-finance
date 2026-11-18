@@ -1,32 +1,59 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { GoogleSheetsConfig } from '@/types/finance';
 
 const STORAGE_KEY = 'google_sheets_config';
 
-export function useGoogleSheetsConfig() {
-  const [config, setConfig] = useState<GoogleSheetsConfig | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+/**
+ * Store único (módulo) para a configuração da planilha.
+ * Todos os componentes que usam o hook partilham o mesmo estado — ao escolher uma planilha em
+ * Configurações, o FinanceProvider recebe a mudança imediatamente e conecta-se a ela.
+ */
+function readConfig(): GoogleSheetsConfig | null {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored ? (JSON.parse(stored) as GoogleSheetsConfig) : null;
+  } catch (error) {
+    console.error('Error loading Google Sheets config:', error);
+    return null;
+  }
+}
 
-  // Load config from localStorage
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setConfig(parsed);
-      }
-    } catch (error) {
-      console.error('Error loading Google Sheets config:', error);
-    } finally {
-      setIsLoading(false);
+let currentConfig: GoogleSheetsConfig | null = readConfig();
+const listeners = new Set<() => void>();
+
+function emit(): void {
+  listeners.forEach((listener) => listener());
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function getSnapshot(): GoogleSheetsConfig | null {
+  return currentConfig;
+}
+
+// Sincroniza com outros separadores
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === STORAGE_KEY || event.key === null) {
+      currentConfig = readConfig();
+      emit();
     }
-  }, []);
+  });
+}
 
-  // Save config to localStorage
+export function useGoogleSheetsConfig() {
+  const config = useSyncExternalStore(subscribe, getSnapshot);
+
   const saveConfig = useCallback((newConfig: GoogleSheetsConfig) => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
-      setConfig(newConfig);
+      currentConfig = newConfig;
+      emit();
       return true;
     } catch (error) {
       console.error('Error saving Google Sheets config:', error);
@@ -34,11 +61,11 @@ export function useGoogleSheetsConfig() {
     }
   }, []);
 
-  // Clear config
   const clearConfig = useCallback(() => {
     try {
       localStorage.removeItem(STORAGE_KEY);
-      setConfig(null);
+      currentConfig = null;
+      emit();
       return true;
     } catch (error) {
       console.error('Error clearing Google Sheets config:', error);
@@ -46,24 +73,14 @@ export function useGoogleSheetsConfig() {
     }
   }, []);
 
-  // Check if config is valid
-  const isValid = useMemo(() => {
-    if (!config) return false;
-    
-    const sheetsId = config.sheetsId?.trim();
-    
-    // Validate sheets ID (should be alphanumeric, usually long)
-    const sheetsIdValid = sheetsId && sheetsId.length > 10;
-    
-    return !!sheetsIdValid;
-  }, [config]);
+  // Validate sheets ID (should be alphanumeric, usually long)
+  const isValid = useMemo(() => (config?.sheetsId?.trim().length ?? 0) > 10, [config]);
 
   return {
     config,
-    isLoading,
+    isLoading: false,
     saveConfig,
     clearConfig,
     isValid,
   };
 }
-

@@ -7,9 +7,9 @@ type FinanceContextType = ReturnType<typeof useFinance>;
 const FinanceContext = createContext<FinanceContextType | null>(null);
 
 export function FinanceProvider({ children }: { children: ReactNode }) {
-  // Consume the shared auth state so auto-connect reacts to sign-in/silent-refresh
-  const { isSignedIn } = useGoogleAuthContext();
-  const finance = useFinance(isSignedIn);
+  // Consume the shared auth state so auto-connect reacts to sign-in/reconnect and account switches
+  const { isSignedIn, rememberedEmail } = useGoogleAuthContext();
+  const finance = useFinance(isSignedIn, rememberedEmail);
 
   return (
     <FinanceContext.Provider value={finance}>
